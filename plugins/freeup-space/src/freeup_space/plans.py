@@ -290,6 +290,16 @@ def build_plan(
     return replace(plan, digest=_digest(plan))
 
 
+def build_permanent_plan(
+    run: ScanRun,
+    evidence: Iterable[Evidence],
+    policy: Policy,
+) -> CleanupPlan:
+    """Build a plan that is only eligible for permanent deletion."""
+
+    return build_plan(run, evidence, policy, action=ActionType.PERMANENT_DELETE)
+
+
 def select_ids(plan: CleanupPlan, ids: Iterable[str]) -> Selection:
     """Validate and preserve only the exact candidate IDs explicitly supplied."""
 
@@ -329,4 +339,10 @@ def select_ids(plan: CleanupPlan, ids: Iterable[str]) -> Selection:
     )
 
 
-__all__ = ["PlanError", "Selection", "build_plan", "select_ids"]
+__all__ = [
+    "PlanError",
+    "Selection",
+    "build_plan",
+    "build_permanent_plan",
+    "select_ids",
+]

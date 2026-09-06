@@ -18,11 +18,14 @@ from .models import (
     Volume,
 )
 from .policy import CategoryRule, Policy
+from .permanent_delete import ApprovalError, permanently_delete
+from .plans import build_permanent_plan
 
 __version__ = "0.1.0"
 
 __all__ = [
     "ActionType",
+    "ApprovalError",
     "Candidate",
     "CandidateSnapshot",
     "CategoryRule",
@@ -39,4 +42,6 @@ __all__ = [
     "SafetyDecision",
     "ScanRun",
     "Volume",
+    "build_permanent_plan",
+    "permanently_delete",
 ]
