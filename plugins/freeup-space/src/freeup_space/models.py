@@ -186,3 +186,58 @@ class SafetyDecision(JsonSerializable):
     actionable: bool
     outcome: str
     reason: str
+
+
+@dataclass(frozen=True)
+class Volume(JsonSerializable):
+    """A local fixed or removable filesystem exposed for scanning."""
+
+    path: Path
+    name: str
+    kind: str
+    filesystem: Optional[str] = None
+    device: Optional[str] = None
+    volume_id: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class FileRecord(JsonSerializable):
+    """Metadata captured for a regular file without reading its contents."""
+
+    path: Path
+    size: int
+    allocated_size: Optional[int]
+    mtime: float
+    atime: float
+    ctime: float
+    st_dev: int
+    st_ino: int
+    volume_id: str
+    file_id: str
+    file_kind: str = "regular"
+    owner: Optional[str] = None
+    flags: Tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class ScanError(JsonSerializable):
+    """A bounded, serializable filesystem error captured during a scan."""
+
+    path: Path
+    operation: str
+    error_type: str
+    message: str
+
+
+@dataclass(frozen=True)
+class ScanProgress(JsonSerializable):
+    """A point-in-time progress update for a cooperative scan."""
+
+    files_scanned: int
+    bytes_scanned: int
+    directories_scanned: int
+    errors: int
+    skipped_links: int
+    complete: bool
+    cancelled: bool
+    current_path: Optional[Path] = None

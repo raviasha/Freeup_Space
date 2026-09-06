@@ -6,10 +6,14 @@ from .models import (
     CandidateSnapshot,
     CleanupPlan,
     DuplicateGroup,
+    FileRecord,
     Receipt,
     Risk,
+    ScanError,
+    ScanProgress,
     SafetyDecision,
     ScanRun,
+    Volume,
 )
 from .policy import CategoryRule, Policy
 
@@ -22,9 +26,13 @@ __all__ = [
     "CategoryRule",
     "CleanupPlan",
     "DuplicateGroup",
+    "FileRecord",
     "Policy",
     "Receipt",
     "Risk",
+    "ScanError",
+    "ScanProgress",
     "SafetyDecision",
     "ScanRun",
+    "Volume",
 ]

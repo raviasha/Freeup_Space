@@ -1,0 +1,165 @@
+import os
+from pathlib import Path
+from threading import Event
+from types import SimpleNamespace
+
+from freeup_space.policy import Policy
+from freeup_space.scanner import FilesystemAdapter, scan_paths
+
+
+class PermissionFaultAdapter(FilesystemAdapter):
+    def __init__(self, blocked: Path):
+        self.blocked = blocked
+
+    def scandir(self, path: Path):
+        if path == self.blocked:
+            raise PermissionError("fixture denied access")
+        return super().scandir(path)
+
+
+class ReparseFaultAdapter(FilesystemAdapter):
+    def __init__(self, reparse_path: Path):
+        self.reparse_path = reparse_path
+
+    def lstat(self, path: Path):
+        result = super().lstat(path)
+        if path == self.reparse_path:
+            values = {
+                name: getattr(result, name)
+                for name in dir(result)
+                if name.startswith("st_")
+            }
+            values["st_file_attributes"] = 0x400
+            return SimpleNamespace(**values)
+        return result
+
+
+def test_scanner_does_not_follow_symlink(tmp_path):
+    real = tmp_path / "real"
+    real.mkdir()
+    (real / "file.bin").write_bytes(b"data")
+    (tmp_path / "alias").symlink_to(real, target_is_directory=True)
+
+    run = scan_paths(
+        [tmp_path], Policy.for_platform("macos"), lambda _: None, Event()
+    )
+
+    assert sum(1 for file in run.files if file.path.name == "file.bin") == 1
+
+
+def test_permission_error_is_recorded_and_scan_continues(tmp_path):
+    blocked = tmp_path / "blocked"
+    blocked.mkdir()
+    (blocked / "secret.txt").write_text("secret")
+    ok = tmp_path / "ok.txt"
+    ok.write_text("visible")
+
+    run = scan_paths(
+        [tmp_path],
+        Policy.for_platform("macos"),
+        lambda _: None,
+        Event(),
+        adapter=PermissionFaultAdapter(blocked),
+    )
+
+    assert {error.path for error in run.errors} == {blocked}
+    assert {file.path for file in run.files} == {ok}
+    assert run.complete is True
+
+
+def test_scanner_excludes_windows_reparse_points(tmp_path):
+    junction = tmp_path / "junction"
+    junction.mkdir()
+    (junction / "nested.bin").write_bytes(b"not visited")
+    ordinary = tmp_path / "ordinary.bin"
+    ordinary.write_bytes(b"visited")
+
+    run = scan_paths(
+        [tmp_path],
+        Policy.for_platform("windows"),
+        lambda _: None,
+        Event(),
+        adapter=ReparseFaultAdapter(junction),
+    )
+
+    assert {file.path for file in run.files} == {ordinary}
+
+
+def test_scanner_cancellation_marks_run_incomplete_and_reports_final_progress(tmp_path):
+    (tmp_path / "file.bin").write_bytes(b"data")
+    cancel = Event()
+    cancel.set()
+    updates = []
+
+    run = scan_paths(
+        [tmp_path], Policy.for_platform("macos"), updates.append, cancel
+    )
+
+    assert run.files == ()
+    assert run.complete is False
+    assert run.completed_at is not None
+    assert updates[-1].complete is False
+    assert updates[-1].cancelled is True
+
+
+def test_scanner_reports_metadata_progress_and_never_opens_file_contents(tmp_path):
+    target = tmp_path / "payload.bin"
+    target.write_bytes(b"payload")
+    before = target.read_bytes()
+    updates = []
+
+    run = scan_paths(
+        [tmp_path], Policy.for_platform("macos"), updates.append, Event()
+    )
+
+    assert len(run.files) == 1
+    record = run.files[0]
+    source_stat = os.lstat(target)
+    assert record.path == target
+    assert record.size == 7
+    assert record.file_id == "{}:{}".format(source_stat.st_dev, source_stat.st_ino)
+    assert record.volume_id == str(source_stat.st_dev)
+    assert record.mtime == source_stat.st_mtime
+    assert target.read_bytes() == before
+    assert updates[-1].files_scanned == 1
+    assert updates[-1].bytes_scanned == 7
+    assert updates[-1].complete is True
+
+
+def test_overlapping_roots_do_not_duplicate_physical_files(tmp_path):
+    child = tmp_path / "child"
+    child.mkdir()
+    target = child / "only-once.bin"
+    target.write_bytes(b"x")
+
+    run = scan_paths(
+        [tmp_path, child], Policy.for_platform("macos"), lambda _: None, Event()
+    )
+
+    assert [file.path for file in run.files] == [target]
+
+
+def test_error_collection_is_bounded(tmp_path):
+    blocked = []
+    for index in range(3):
+        path = tmp_path / "blocked-{}".format(index)
+        path.mkdir()
+        blocked.append(path)
+
+    class ManyPermissionFaults(FilesystemAdapter):
+        def scandir(self, path: Path):
+            if path in blocked:
+                raise PermissionError("denied")
+            return super().scandir(path)
+
+    run = scan_paths(
+        [tmp_path],
+        Policy.for_platform("macos"),
+        lambda _: None,
+        Event(),
+        adapter=ManyPermissionFaults(),
+        max_errors=2,
+    )
+
+    assert len(run.errors) == 2
+    assert run.complete is True
