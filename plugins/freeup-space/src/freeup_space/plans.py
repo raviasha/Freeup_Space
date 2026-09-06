@@ -92,14 +92,45 @@ def _duplicate_evidence(
 ) -> Tuple[Evidence, ...]:
     findings = []
     for group in run.duplicate_groups:
+        retained_key = _normalized_path(group.retained_path, run.platform)
+        duplicate_keys = tuple(
+            _normalized_path(path, run.platform) for path in group.duplicate_paths
+        )
+        retained_record = records.get(retained_key)
+        try:
+            digest_is_sha256 = (
+                isinstance(group.digest, str)
+                and len(group.digest) == 64
+                and int(group.digest, 16) >= 0
+            )
+        except ValueError:
+            digest_is_sha256 = False
+        group_records = [records.get(key) for key in duplicate_keys]
+        identities = (
+            [(retained_record.st_dev, retained_record.st_ino)]
+            if retained_record is not None
+            else []
+        ) + [
+            (record.st_dev, record.st_ino)
+            for record in group_records
+            if record is not None
+        ]
+        if (
+            retained_record is None
+            or not duplicate_keys
+            or retained_key in duplicate_keys
+            or len(set(duplicate_keys)) != len(duplicate_keys)
+            or any(record is None for record in group_records)
+            or retained_record.size != group.size
+            or any(record.size != group.size for record in group_records)
+            or len(set(identities)) != len(identities)
+            or not digest_is_sha256
+            or group.reclaimable_bytes != group.size * len(duplicate_keys)
+        ):
+            raise PlanError("invalid duplicate group: {}".format(group.group_id))
         for path in group.duplicate_paths:
             record = records.get(_normalized_path(path, run.platform))
-            if record is None:
-                raise PlanError(
-                    "duplicate candidate is absent from the scan inventory: {}".format(
-                        path
-                    )
-                )
+            assert record is not None
             findings.append(
                 Evidence(
                     path=path,

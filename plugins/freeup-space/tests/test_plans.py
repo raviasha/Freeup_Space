@@ -258,6 +258,35 @@ def test_report_only_policy_boundary_overrides_duplicate_primary_category():
     assert plan.candidates[0].reclaimable_bytes == 0
 
 
+def test_duplicate_group_rejects_missing_or_mismatched_retained_inventory_record(tmp_path):
+    retained = tmp_path / "kept.bin"
+    duplicate = tmp_path / "copy.bin"
+    run = ScanRun(
+        run_id="invalid-duplicate",
+        platform="macos",
+        started_at=NOW,
+        completed_at=NOW,
+        complete=True,
+        files=(
+            record(duplicate, size=1024, inode=41),
+            record(retained, size=2048, inode=42),
+        ),
+        duplicate_groups=(
+            DuplicateGroup(
+                group_id="DUP-BAD",
+                digest="c" * 64,
+                size=1024,
+                retained_path=retained,
+                duplicate_paths=(duplicate,),
+                reclaimable_bytes=1024,
+            ),
+        ),
+    )
+
+    with pytest.raises(PlanError, match="invalid duplicate group"):
+        build_plan(run, (), Policy.for_platform("macos"))
+
+
 def test_plan_order_is_risk_then_reclaimable_bytes_then_category_then_path(tmp_path):
     paths = {
         "small_cache": tmp_path / "cache-b.bin",
@@ -321,3 +350,51 @@ def test_plan_order_is_risk_then_reclaimable_bytes_then_category_then_path(tmp_p
         paths["personal"],
         paths["unknown"],
     ]
+
+
+@pytest.mark.parametrize(
+    "case",
+    ("missing-retained", "same-path", "wrong-size", "same-identity", "bad-digest"),
+)
+def test_duplicate_group_requires_a_distinct_compatible_retained_record(tmp_path, case):
+    retained = tmp_path / "retained.bin"
+    duplicate = tmp_path / "duplicate.bin"
+    retained_record = record(retained, size=5000, inode=71)
+    duplicate_record = record(duplicate, size=5000, inode=72)
+    retained_path = retained
+    digest = "c" * 64
+
+    if case == "missing-retained":
+        files = (duplicate_record,)
+    elif case == "same-path":
+        files = (duplicate_record,)
+        retained_path = duplicate
+    elif case == "wrong-size":
+        files = (record(retained, size=4999, inode=71), duplicate_record)
+    elif case == "same-identity":
+        files = (record(retained, size=5000, inode=72), duplicate_record)
+    else:
+        files = (retained_record, duplicate_record)
+        digest = "not-a-sha256"
+
+    run = ScanRun(
+        run_id="invalid-{}".format(case),
+        platform="macos",
+        started_at=NOW,
+        completed_at=NOW,
+        complete=True,
+        files=files,
+        duplicate_groups=(
+            DuplicateGroup(
+                group_id="DUP-INVALID",
+                digest=digest,
+                size=5000,
+                retained_path=retained_path,
+                duplicate_paths=(duplicate,),
+                reclaimable_bytes=5000,
+            ),
+        ),
+    )
+
+    with pytest.raises(PlanError, match="invalid duplicate group"):
+        build_plan(run, (), Policy.for_platform("macos"))

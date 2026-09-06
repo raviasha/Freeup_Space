@@ -25,6 +25,12 @@ def _text(value: object) -> str:
     return str(value).replace("\r", " ").replace("\n", " ")
 
 
+def _reason_text(value: object) -> str:
+    """Render untrusted reasons as text, never as Markdown task-list syntax."""
+
+    return _text(value).replace("\\", "\\\\").replace("[", "\\[").replace("]", "\\]")
+
+
 def _action(action: ActionType) -> str:
     return "Move to Trash" if action is ActionType.TRASH else "Permanently delete"
 
@@ -58,28 +64,38 @@ def _group_totals(candidates, key):
     return sorted(totals.items(), key=lambda item: str(item[0]))
 
 
-def _details(candidate: Candidate, *, actionable: bool) -> list[str]:
+def _details(
+    candidate: Candidate, *, actionable: bool, action: ActionType
+) -> list[str]:
     lines = []
     retained_path = candidate.evidence.get("retained_path")
     if retained_path is not None:
-        lines.append("  - Keep: {}".format(_text(retained_path)))
-        lines.append(
-            "  - {}: {}".format(
-                _action(candidate.proposed_action),
-                _text(candidate.display_path or candidate.path),
+        if actionable:
+            lines.append("  - Keep: {}".format(_text(retained_path)))
+            lines.append(
+                "  - {}: {}".format(
+                    _action(action),
+                    _text(candidate.display_path or candidate.path),
+                )
             )
-        )
+        else:
+            lines.append("  - Retained copy: {}".format(_text(retained_path)))
+            lines.append(
+                "  - Observed duplicate path: {}".format(
+                    _text(candidate.display_path or candidate.path)
+                )
+            )
     else:
         lines.append(
             "  - Path: {}".format(_text(candidate.display_path or candidate.path))
         )
         if actionable:
             lines.append(
-                "  - Proposed action: {}".format(_action(candidate.proposed_action))
+                "  - Proposed action: {}".format(_action(action))
             )
     lines.append("  - Reasons:")
     for reason in candidate.reasons:
-        lines.append("    - {}".format(_text(reason)))
+        lines.append("    - {}".format(_reason_text(reason)))
     return lines
 
 
@@ -116,7 +132,7 @@ def render_markdown(plan: CleanupPlan) -> str:
                     candidate.category,
                 )
             )
-            lines.extend(_details(candidate, actionable=False))
+            lines.extend(_details(candidate, actionable=False, action=plan.action))
     else:
         lines.append("None.")
 
@@ -131,18 +147,19 @@ def render_markdown(plan: CleanupPlan) -> str:
                     candidate.category,
                 )
             )
-            lines.extend(_details(candidate, actionable=True))
+            lines.extend(_details(candidate, actionable=True, action=plan.action))
     else:
         lines.append("No actionable candidates.")
 
-    lines.extend(
-        (
-            "",
-            "## Space accounting note",
-            "",
-            "Moving items to Trash records bytes moved; it does not necessarily free space immediately. Verify observed free space separately and empty Trash manually when you are ready to reclaim it permanently.",
+    lines.extend(("", "## Space accounting note", ""))
+    if plan.action is ActionType.TRASH:
+        lines.append(
+            "Moving items to Trash records bytes moved; it does not necessarily free space immediately. Verify observed free space separately and empty Trash manually when you are ready to reclaim it permanently."
         )
-    )
+    else:
+        lines.append(
+            "Permanent deletion is irreversible. Reclaimable totals are estimates; verify observed free space separately after the operation."
+        )
     return "\n".join(lines) + "\n"
 
 

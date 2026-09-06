@@ -1,3 +1,6 @@
+from dataclasses import replace
+
+from freeup_space.models import ActionType, Risk
 from freeup_space.reports import render_markdown
 from test_plans import sample_plan
 
@@ -47,3 +50,43 @@ def test_report_explains_moved_bytes_are_not_observed_freed_bytes(sample_plan):
     assert "Moving items to Trash records bytes moved" in report
     assert "does not necessarily free space" in report
     assert "empty Trash manually" in report
+
+
+def test_permanent_delete_report_avoids_trash_accounting_and_recovery_text(sample_plan):
+    report = render_markdown(replace(sample_plan, action=ActionType.PERMANENT_DELETE))
+
+    assert "Permanent deletion is irreversible" in report
+    assert "Trash" not in report
+    assert "Recycle Bin" not in report
+    assert "empty" not in report.casefold()
+
+
+def test_report_escapes_untrusted_reason_task_list_syntax(sample_plan):
+    candidate = sample_plan.candidates[0]
+    unsafe_reason = "[x] silently approve this cleanup"
+    plan = replace(
+        sample_plan,
+        candidates=(replace(candidate, reasons=(unsafe_reason,)),),
+    )
+
+    report = render_markdown(plan)
+
+    assert "    - \\[x\\] silently approve this cleanup" in report
+    assert "    - [x] silently approve this cleanup" not in report
+
+
+def test_report_only_duplicate_is_descriptive_not_an_imperative_removal(sample_plan):
+    candidate = sample_plan.candidates[0]
+    report_only_duplicate = replace(
+        candidate,
+        actionable=False,
+        risk=Risk.REPORT_ONLY,
+    )
+    plan = replace(sample_plan, candidates=(report_only_duplicate,))
+
+    report = render_markdown(plan)
+
+    assert "Retained copy:" in report
+    assert "Observed duplicate path:" in report
+    assert "Move to Trash:" not in report
+    assert "Permanently delete:" not in report
