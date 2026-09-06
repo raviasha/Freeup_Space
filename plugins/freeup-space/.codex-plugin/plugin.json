@@ -1,18 +1,18 @@
 {
   "name": "freeup-space",
-  "version": "0.1.0",
-  "description": "Safely identify and reclaim disk space from local development artifacts.",
+  "version": "0.1.0+codex.20260906105140",
+  "description": "Review cleanup opportunities on macOS and Windows with Quick Scan, Deep Scan, or Deep Scan + AI.",
   "author": {
     "name": "Local developer"
   },
   "skills": "./skills/",
   "interface": {
     "displayName": "Freeup Space",
-    "shortDescription": "Use Freeup Space in Codex.",
-    "longDescription": "Freeup Space adds a local Codex plugin scaffold.",
+    "shortDescription": "Choose Quick Scan, Deep Scan, or Deep Scan + AI.",
+    "longDescription": "Find disk cleanup opportunities on macOS and Windows using fixed-rule quick or deep scans, with optional AI investigation. Review a categorized checklist before moving approved files to Trash or Recycle Bin.",
     "developerName": "Local developer",
     "category": "Productivity",
     "capabilities": [],
-    "defaultPrompt": "Help me use Freeup Space."
+    "defaultPrompt": "Help me free up disk space. Ask me to choose Quick Scan, Deep Scan, or Deep Scan + AI before scanning."
   }
 }

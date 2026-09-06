@@ -149,6 +149,8 @@ class ScanRun(JsonSerializable):
     duplicate_groups: Tuple[DuplicateGroup, ...] = ()
     evidence: Tuple[Any, ...] = ()
     errors: Tuple[Any, ...] = ()
+    mode: str = "scan"
+    coverage: Mapping[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

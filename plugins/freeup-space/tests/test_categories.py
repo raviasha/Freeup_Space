@@ -66,6 +66,23 @@ def test_cache_named_directory_outside_explicit_safe_roots_is_not_low_risk(tmp_p
     assert evidence[0].actionable is False
 
 
+def test_cache_directory_uses_aggregate_allocated_size(tmp_path):
+    cache_root = tmp_path / "Caches"
+    policy = replace(
+        Policy.for_platform("macos"), safe_roots=(str(cache_root),)
+    )
+    record = replace(
+        make_record(cache_root / "tool-cache"),
+        file_kind="directory",
+        allocated_size=8 * 1024 * 1024,
+    )
+
+    evidence = classify(record, policy)
+
+    assert evidence[0].category == "cache"
+    assert evidence[0].size == 8 * 1024 * 1024
+
+
 def test_os_managed_path_retains_applicable_evidence_but_remains_report_only():
     record = make_record(Path("/System/Library/archive.zip"))
 

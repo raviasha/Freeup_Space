@@ -1,4 +1,5 @@
 import os
+import pytest
 from pathlib import Path
 from threading import Event
 from types import SimpleNamespace
@@ -155,6 +156,7 @@ def test_ancestor_replaced_by_symlink_to_same_tree_is_not_traversed(tmp_path):
     assert run.errors
 
 
+@pytest.mark.skipif(os.name == "nt", reason="Windows uses native handles, not POSIX directory descriptors")
 def test_fallback_fails_closed_when_no_race_resistant_directory_api(
     tmp_path, monkeypatch
 ):

@@ -158,7 +158,7 @@ def test_candidate_serialization_is_json_safe():
     encoded = json.dumps(candidate.to_dict())
 
     assert '"risk": "medium"' in encoded
-    assert '"path": "/tmp/item.bin"' in encoded
+    assert json.loads(encoded)["path"] == str(candidate.path)
     assert '"created_at": "2026-09-06T00:00:00+00:00"' in encoded
 
 

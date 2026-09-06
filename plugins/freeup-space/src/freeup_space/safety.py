@@ -12,6 +12,7 @@ from typing import Callable, Optional
 
 from .models import CandidateSnapshot, SafetyDecision
 from .policy import Policy
+from .path_utils import normalize_path
 
 
 def _platform_name(platform: str) -> str:
@@ -24,9 +25,7 @@ def _platform_name(platform: str) -> str:
 
 
 def _normalizer(platform: str) -> Callable[[str], str]:
-    if _platform_name(platform) == "windows":
-        return lambda value: ntpath.normcase(ntpath.normpath(value.replace("/", "\\")))
-    return lambda value: posixpath.abspath(posixpath.normpath(value))
+    return lambda value: normalize_path(value, _platform_name(platform))
 
 
 def _contains(path: str, root: str, platform: str) -> bool:
@@ -107,11 +106,8 @@ def _has_link_component(path: Path) -> bool:
 
 
 def _digest(path: Path) -> str:
-    hasher = hashlib.sha256()
-    with path.open("rb") as source:
-        for block in iter(lambda: source.read(1024 * 1024), b""):
-            hasher.update(block)
-    return hasher.hexdigest()
+    from .duplicates import sha256_hasher
+    return sha256_hasher(path)
 
 
 def _is_recognized_safe_root(path: Path, policy: Policy) -> bool:

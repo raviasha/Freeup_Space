@@ -37,6 +37,14 @@ class FilesystemAdapter:
     def scan_directory(self, path: Path, expected_stat):
         """Open and snapshot one unchanged directory without following its leaf."""
 
+        if os.name == "nt":
+            from .windows_fs import locked_directory
+            with locked_directory(path):
+                actual_stat = os.lstat(path)
+                _require_same_directory(path, expected_stat, actual_stat)
+                entries, errors = self._read_entries(path, os.scandir(path))
+                return actual_stat, entries, errors
+
         if (
             hasattr(os, "O_DIRECTORY")
             and hasattr(os, "O_NOFOLLOW")
@@ -194,6 +202,8 @@ def scan_paths(
     *,
     adapter: Optional[FilesystemAdapter] = None,
     max_errors: int = 1000,
+    exclude: Optional[Callable[[Path], bool]] = None,
+    allow_partial: bool = False,
 ) -> ScanRun:
     """Scan regular-file metadata without following links or rewriting sources."""
 
@@ -240,6 +250,9 @@ def scan_paths(
 
     while pending and not cancel.is_set():
         path, root_device, expected_stat = pending.pop()
+        if exclude is not None and exclude(path):
+            report(path)
+            continue
         if expected_stat is None:
             try:
                 path_stat = filesystem.lstat(path)
@@ -301,7 +314,7 @@ def scan_paths(
         report(path)
 
     completed_at = datetime.now(timezone.utc)
-    complete = not cancel.is_set() and errors_encountered == 0
+    complete = not cancel.is_set() and (errors_encountered == 0 or allow_partial)
     report(None, complete=complete)
     return ScanRun(
         run_id=uuid4().hex,
@@ -311,6 +324,13 @@ def scan_paths(
         complete=complete,
         files=tuple(files),
         errors=tuple(errors),
+        coverage={
+            "status": "interrupted" if cancel.is_set() else ("partial" if errors_encountered else "complete"),
+            "error_count": errors_encountered,
+            "skipped_links": skipped_links,
+            "files_scanned": len(files),
+            "directories_scanned": directories_scanned,
+        },
     )
 
 

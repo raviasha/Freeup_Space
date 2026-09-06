@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Callable, DefaultDict, Iterable, List, Optional, Tuple
 
 from .models import DuplicateGroup, FileRecord
+from .file_io import regular_descriptor
 
 
 Hasher = Callable[[Path], str]
@@ -19,11 +20,7 @@ _PARTIAL_BYTES = 64 * 1024
 def sha256_hasher(path: Path) -> str:
     """Hash a regular file without following its final symlink component."""
 
-    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0)
-    if hasattr(os, "O_NOFOLLOW"):
-        flags |= os.O_NOFOLLOW
-    descriptor = os.open(path, flags)
-    try:
+    with regular_descriptor(path) as descriptor:
         if not stat.S_ISREG(os.fstat(descriptor).st_mode):
             raise OSError("duplicate hashing requires a regular file")
         digest = hashlib.sha256()
@@ -32,8 +29,6 @@ def sha256_hasher(path: Path) -> str:
             if not block:
                 return digest.hexdigest()
             digest.update(block)
-    finally:
-        os.close(descriptor)
 
 
 def _matches_record(value, record: FileRecord) -> bool:
@@ -46,12 +41,8 @@ def _matches_record(value, record: FileRecord) -> bool:
 
 
 def _partial_fingerprint(record: FileRecord) -> Optional[str]:
-    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0)
-    if hasattr(os, "O_NOFOLLOW"):
-        flags |= os.O_NOFOLLOW
     try:
-        descriptor = os.open(record.path, flags)
-        try:
+        with regular_descriptor(record.path) as descriptor:
             before = os.fstat(descriptor)
             if not _matches_record(before, record):
                 return None
@@ -68,8 +59,6 @@ def _partial_fingerprint(record: FileRecord) -> Optional[str]:
                 after, "st_mtime_ns", after.st_mtime
             ):
                 return None
-        finally:
-            os.close(descriptor)
     except OSError:
         return None
     digest = hashlib.sha256()
@@ -98,12 +87,14 @@ def _current_snapshot(record: FileRecord) -> Optional[Tuple[int, int, int, int, 
 
 
 def find_duplicates(
-    files: Iterable[FileRecord], hasher: Hasher
+    files: Iterable[FileRecord], hasher: Hasher, *, progress=None
 ) -> List[DuplicateGroup]:
     """Confirm exact duplicates while excluding aliases of one physical file."""
 
     by_identity = {}
     for record in sorted(files, key=lambda item: str(item.path)):
+        if record.file_kind != "regular" or record.size == 0:
+            continue
         identity = (record.st_dev, record.st_ino)
         by_identity.setdefault(identity, record)
 
@@ -132,7 +123,7 @@ def find_duplicates(
                     continue
                 try:
                     claimed_digest = hasher(record.path)
-                    digest = sha256_hasher(record.path)
+                    digest = claimed_digest if hasher is sha256_hasher else sha256_hasher(record.path)
                 except (OSError, ValueError):
                     continue
                 if (
@@ -141,6 +132,8 @@ def find_duplicates(
                     and _current_snapshot(record) == before_hash
                 ):
                     by_digest[digest].append(record)
+                if progress is not None:
+                    progress(record.path)
             for digest in sorted(by_digest):
                 exact = sorted(by_digest[digest], key=lambda item: str(item.path))
                 if len(exact) < 2:

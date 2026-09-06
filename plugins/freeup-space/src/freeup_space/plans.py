@@ -24,6 +24,7 @@ from .models import (
     ScanRun,
 )
 from .policy import Policy
+from .path_utils import normalize_path
 
 
 SCHEMA_VERSION = "1"
@@ -67,10 +68,7 @@ class Selection:
 
 
 def _normalized_path(path: Path, platform: str) -> str:
-    value = str(path)
-    if platform == "windows":
-        return ntpath.normcase(ntpath.normpath(value.replace("/", "\\")))
-    return posixpath.abspath(posixpath.normpath(value))
+    return normalize_path(str(path), platform)
 
 
 def _safe_root(path: Path, policy: Policy) -> Optional[Path]:
@@ -225,10 +223,13 @@ def build_plan(
         digest = None
         if duplicate_group is not None:
             digest = duplicate_group.digest
+            keeper = records[_normalized_path(duplicate_group.retained_path, run.platform)]
             evidence_data.update(
                 {
                     "duplicate_group": duplicate_group.group_id,
                     "retained_path": str(duplicate_group.retained_path),
+                    "retained_snapshot": {"st_dev": keeper.st_dev, "st_ino": keeper.st_ino,
+                                          "size": keeper.size, "mtime": keeper.mtime},
                 }
             )
         candidates.append(
@@ -329,6 +330,12 @@ def select_ids(plan: CleanupPlan, ids: Iterable[str]) -> Selection:
                 "non-actionable candidate cannot be selected: {}".format(candidate_id)
             )
         selected.append(candidate)
+
+    selected_paths = {_normalized_path(candidate.path, plan.platform) for candidate in selected}
+    for candidate in selected:
+        retained_path = candidate.evidence.get("retained_path")
+        if retained_path and _normalized_path(Path(retained_path), plan.platform) in selected_paths:
+            raise PlanError("a duplicate's retained copy cannot be selected in the same cleanup")
 
     return Selection(
         candidate_ids=selected_ids,

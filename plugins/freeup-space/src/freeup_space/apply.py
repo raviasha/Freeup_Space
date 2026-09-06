@@ -44,8 +44,8 @@ def _free_space_root(path: Path) -> Path:
     return Path(resolved.anchor or str(resolved))
 
 
-def _move(path: Path, platform: str) -> MoveResult:
-    bytes_moved = path.lstat().st_size
+def _move(path: Path, platform: str, reclaimable_bytes: int) -> MoveResult:
+    bytes_moved = reclaimable_bytes
     if platform == "macos":
         move_to_macos_trash(path, platform)
         backend = "finder-trash"
@@ -100,7 +100,7 @@ def apply_selection(
             )
             continue
         try:
-            result = _move(candidate.path, platform)
+            result = _move(candidate.path, platform, candidate.reclaimable_bytes)
         except Exception as error:  # pragma: no cover - exercised by platform adapters
             failed.append(
                 ApplySkipped(

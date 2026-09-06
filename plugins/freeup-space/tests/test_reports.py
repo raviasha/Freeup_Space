@@ -1,7 +1,9 @@
 from dataclasses import replace
 
+import pytest
+
 from freeup_space.models import ActionType, Risk
-from freeup_space.reports import render_markdown
+from freeup_space.reports import quick_candidates, render_markdown, render_quick_markdown
 from test_plans import sample_plan
 
 
@@ -90,3 +92,33 @@ def test_report_only_duplicate_is_descriptive_not_an_imperative_removal(sample_p
     assert "Observed duplicate path:" in report
     assert "Move to Trash:" not in report
     assert "Permanently delete:" not in report
+
+
+def test_quick_report_is_bounded_deterministic_and_omits_report_only(sample_plan):
+    first = render_quick_markdown(sample_plan, limit=1)
+    second = render_quick_markdown(sample_plan, limit=1)
+
+    assert first == second
+    assert "DUP-001" in first
+    assert "SYS-001" not in first
+    assert "at most 1 results" in first
+    assert quick_candidates(sample_plan, limit=1)[0].candidate_id == "DUP-001"
+
+
+def test_quick_report_rejects_nonpositive_limit(sample_plan):
+    with pytest.raises(ValueError, match="limit must be positive"):
+        render_quick_markdown(sample_plan, limit=0)
+
+
+def test_quick_candidates_rank_reclaimable_value_before_plan_order(sample_plan):
+    candidate = sample_plan.candidates[0]
+    larger = replace(
+        candidate,
+        candidate_id="CAC-999",
+        category="cache",
+        risk=Risk.LOW,
+        reclaimable_bytes=candidate.reclaimable_bytes * 2,
+    )
+    plan = replace(sample_plan, candidates=(candidate, larger))
+
+    assert quick_candidates(plan, limit=1) == (larger,)

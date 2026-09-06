@@ -11,6 +11,8 @@ from typing import Dict, Iterable, List, Optional
 from .models import Evidence, EvidenceCandidate, FileRecord, Risk
 from .policy import Policy
 from .safety import is_protected
+from .storage_context import storage_context
+from .path_utils import normalize_path
 
 
 _RISK_ORDER = {
@@ -49,9 +51,7 @@ _DATABASE_EXTENSIONS = frozenset({".db", ".db3", ".sqlite", ".sqlite3"})
 
 
 def _normalize(value: str, platform: str) -> str:
-    if platform == "windows":
-        return ntpath.normcase(ntpath.normpath(value.replace("/", "\\")))
-    return posixpath.abspath(posixpath.normpath(value))
+    return normalize_path(value, platform)
 
 
 def _inside(path: Path, root: str, platform: str) -> bool:
@@ -77,7 +77,7 @@ def _root_kind(root: str, platform: str) -> Optional[str]:
     normalized = _normalize(root, platform).rstrip("/\\")
     basename = (ntpath if platform == "windows" else posixpath).basename(normalized)
     name = basename.casefold()
-    if name in {"cache", "caches"}:
+    if name in {".cache", "cache", "caches"}:
         return "cache"
     if name in {"log", "logs"}:
         return "log"
@@ -97,6 +97,11 @@ def _evidence(
     **details: object,
 ) -> Evidence:
     category_rule = policy.category_rules[category]
+    evidence_size = (
+        record.allocated_size
+        if record.file_kind == "directory" and record.allocated_size is not None
+        else record.size
+    )
     return Evidence(
         path=record.path,
         category=category,
@@ -104,7 +109,7 @@ def _evidence(
         reason=reason or category_rule.reason,
         risk=category_rule.risk,
         actionable=category_rule.actionable,
-        size=record.size,
+        size=evidence_size,
         details=details,
     )
 
@@ -116,7 +121,7 @@ def classify(record: FileRecord, policy: Policy) -> List[Evidence]:
     or location heuristics never make OS-managed data actionable.
     """
 
-    findings: List[Evidence] = []
+    findings: List[Evidence] = storage_context(record, policy)
     protection = is_protected(record.path, policy, policy.platform)
     if not protection.actionable:
         category = (

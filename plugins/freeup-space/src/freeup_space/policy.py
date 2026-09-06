@@ -41,6 +41,7 @@ _CATEGORY_RULES = MappingProxyType(
         "unclassified": CategoryRule(
             Risk.REPORT_ONLY, False, "insufficient evidence for safe cleanup"
         ),
+        "managed-storage": CategoryRule(Risk.REPORT_ONLY, False, "use the owning application's storage manager"),
     }
 )
 
@@ -88,7 +89,10 @@ class Policy:
                 safe_roots=(
                     str(Path.home() / "Library" / "Caches"),
                     str(Path.home() / "Library" / "Logs"),
+                    str(Path.home() / ".cache"),
                     str(Path.home() / "Downloads"),
+                    str(Path.home() / "Documents"),
+                    str(Path.home() / "Desktop"),
                 ),
             )
         if normalized == "windows":
@@ -113,7 +117,10 @@ class Policy:
                 workspace_roots=(str(Path.cwd()),),
                 safe_roots=(
                     str(Path.home() / "AppData" / "Local" / "Temp"),
+                    str(Path.home() / ".cache"),
                     str(Path.home() / "Downloads"),
+                    str(Path.home() / "Documents"),
+                    str(Path.home() / "Desktop"),
                 ),
             )
         raise ValueError(

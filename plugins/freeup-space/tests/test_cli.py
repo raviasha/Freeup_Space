@@ -15,6 +15,7 @@ from freeup_space.cli import (
     build_parser,
     cmd_apply,
     cmd_permanent_delete,
+    cmd_quick,
     cmd_report,
     cmd_scan,
 )
@@ -172,4 +173,40 @@ def test_parser_exposes_all_cli_commands():
     parser = build_parser()
     commands = parser._subparsers._group_actions[0].choices
 
-    assert {"scan", "report", "apply", "permanent-delete"} <= set(commands)
+    assert {"quick", "scan", "report", "apply", "permanent-delete"} <= set(commands)
+
+
+def test_quick_command_owns_scan_plan_and_bounded_summary(tmp_path, monkeypatch, capsys):
+    run = _sample_run(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("freeup_space.cli.scan_paths", lambda *args, **kwargs: run)
+    monkeypatch.setattr(
+        "freeup_space.cli._build_plan",
+        lambda *args, **kwargs: SimpleNamespace(
+            run_id="run-quick",
+            platform="macos",
+            digest="f" * 64,
+            candidates=(),
+            action=SimpleNamespace(value="trash"),
+            to_dict=lambda: {"run_id": "run-quick"},
+        ),
+    )
+    monkeypatch.setattr(
+        "freeup_space.cli.render_quick_markdown", lambda *args, **kwargs: "quick\n"
+    )
+
+    exit_code = cmd_quick(
+        SimpleNamespace(
+            paths=[tmp_path],
+            platform="macos",
+            run_id="run-quick",
+            limit=10,
+            summary_only=True,
+        )
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == 0
+    assert payload["run_id"] == "run-quick"
+    assert payload["candidate_count"] == 0
+    assert (RUNS_DIR / "run-quick" / "report.md").read_text() == "quick\n"

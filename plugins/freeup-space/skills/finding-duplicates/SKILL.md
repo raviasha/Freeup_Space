@@ -9,13 +9,15 @@ Use this skill when the task is to discover duplicate-file cleanup candidates wi
 
 Work in review mode first:
 
-- Run `freeup-space scan` for the target platform.
+- Follow [the scan-mode workflow](../freeing-up-space/SKILL.md): let the user choose a mode for this run unless already explicit. Explain that exact duplicate discovery requires Deep Scan or Deep Scan + AI.
+- Use the bundled freeup-space runner's `start --mode deep --summary-only [paths...]` or the explicitly chosen `deep-ai` mode. Quick Scan does not perform content comparison.
 - Use `freeup-space report` to inspect the duplicate candidates before any action.
 - If the user wants a mutation, ask for explicit approval of the exact candidate IDs only.
 
 Keep the approval boundary tight:
 
 - Never broaden the request from specific candidate IDs to "all duplicates" without a fresh approval.
+- Preserve the retained copy. Exact duplicates use local SHA-256 confirmation; this workflow does not perform visual similarity, blurry-image culling, or ebook organization.
 - Do not suggest mutation commands until the review report is in hand.
 
 Recovery guidance:
