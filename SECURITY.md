@@ -9,6 +9,8 @@ Use these guardrails when operating it:
 - Prefer recoverable actions to Trash or the Recycle Bin when the plan supports them.
 - Use permanent deletion only when the plan and the user explicitly allow it.
 - Keep permissions as narrow as possible.
+- Prefer disposable temporary roots for tests and CI checks.
+- CI validates packaging, the plugin manifest, and skill files on macOS and Windows without accessing real home directories or host volumes.
 
 Platform notes:
 

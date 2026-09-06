@@ -42,6 +42,11 @@ Recovery guidance:
 - Trash or Recycle Bin recovery is not the same as permanent deletion.
 - Permanent deletion has no recovery path through Trash or the Recycle Bin.
 
+Release verification:
+
+- CI runs packaging checks, the test suite, plugin manifest validation, and skill-file validation on macOS and Windows.
+- End-to-end checks use disposable temporary roots and explicit candidate IDs only.
+
 Sample report:
 
 - See [examples/sample-report.md](examples/sample-report.md) for a short example of the user-facing review output.

@@ -1,0 +1,70 @@
+name: test
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  verify:
+    name: "pytest and validation (${{ matrix.os }})"
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install build pytest
+          python -m pip install -e plugins/freeup-space
+
+      - name: Run packaging checks
+        working-directory: plugins/freeup-space
+        run: |
+          python -m build
+
+      - name: Run tests
+        run: |
+          python -m pytest -q
+
+      - name: Validate plugin manifest
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          manifest = json.loads(Path("plugins/freeup-space/.codex-plugin/plugin.json").read_text(encoding="utf-8"))
+          assert manifest["name"] == "freeup-space"
+          assert manifest["version"]
+          assert manifest["description"]
+
+          catalog = json.loads(Path(".agents/plugins/marketplace.json").read_text(encoding="utf-8"))
+          entry = next(item for item in catalog["plugins"] if item["name"] == "freeup-space")
+          assert entry["source"]["path"] == "./plugins/freeup-space"
+          PY
+
+      - name: Validate skill files
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          for skill in sorted(Path("skills").glob("*/SKILL.md")):
+              text = skill.read_text(encoding="utf-8")
+              assert text.startswith("---\n")
+              assert "freeup-space" in text
+              assert "candidate ID" in text or "candidate IDs" in text
+              assert "Trash" in text or "Recycle Bin" in text
+          PY
