@@ -47,6 +47,7 @@ class Policy:
     category_rules: Mapping[str, CategoryRule]
     version: str = "1"
     workspace_roots: Tuple[str, ...] = ()
+    safe_roots: Tuple[str, ...] = ()
 
     @classmethod
     def for_platform(cls, platform: str) -> "Policy":
@@ -63,7 +64,13 @@ class Policy:
                     "/System",
                     "/Library",
                     "/Applications",
+                    "/usr",
+                    "/bin",
+                    "/sbin",
+                    "/dev",
+                    "/private/etc",
                     "/private/var/db",
+                    "/private/var/log",
                     "/private/var/vm",
                     "/private/var/root",
                     "/Volumes/.timemachine",
@@ -72,27 +79,36 @@ class Policy:
                 protected_files=("/private/var/vm/sleepimage",),
                 category_rules=_CATEGORY_RULES,
                 workspace_roots=(str(Path.cwd()),),
+                safe_roots=(
+                    str(Path.home() / "Library" / "Caches"),
+                    str(Path.home() / "Library" / "Logs"),
+                    str(Path.home() / "Downloads"),
+                ),
             )
         if normalized == "windows":
             return cls(
                 platform=normalized,
                 protected_roots=(
-                    r"C:\Windows",
-                    r"C:\Program Files",
-                    r"C:\Program Files (x86)",
-                    r"C:\ProgramData",
-                    r"C:\System Volume Information",
-                    r"C:\Recovery",
-                    r"C:\$Recycle.Bin",
-                    r"C:\Windows.old",
+                    r"\Windows",
+                    r"\Program Files",
+                    r"\Program Files (x86)",
+                    r"\ProgramData",
+                    r"\System Volume Information",
+                    r"\Recovery",
+                    r"\$Recycle.Bin",
+                    r"\Windows.old",
                 ),
                 protected_files=(
-                    r"C:\hiberfil.sys",
-                    r"C:\pagefile.sys",
-                    r"C:\swapfile.sys",
+                    r"\hiberfil.sys",
+                    r"\pagefile.sys",
+                    r"\swapfile.sys",
                 ),
                 category_rules=_CATEGORY_RULES,
                 workspace_roots=(str(Path.cwd()),),
+                safe_roots=(
+                    str(Path.home() / "AppData" / "Local" / "Temp"),
+                    str(Path.home() / "Downloads"),
+                ),
             )
         raise ValueError(
             "Unsupported platform {!r}; expected 'macos' or 'windows'".format(platform)

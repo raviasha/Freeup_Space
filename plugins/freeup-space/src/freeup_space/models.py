@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import math
+import os
 from dataclasses import dataclass, field, fields, is_dataclass
-from datetime import datetime
+from datetime import date, datetime
 from enum import Enum
 from pathlib import Path, PurePath
 from typing import Any, Dict, Mapping, Optional, Tuple
@@ -27,18 +29,35 @@ class ActionType(str, Enum):
 
 def _json_safe(value: Any) -> Any:
     if isinstance(value, Enum):
-        return value.value
-    if isinstance(value, PurePath):
-        return str(value)
-    if isinstance(value, datetime):
+        return _json_safe(value.value)
+    if value is None or isinstance(value, (str, bool, int)):
+        return value
+    if isinstance(value, float):
+        if math.isfinite(value):
+            return value
+        if math.isnan(value):
+            return "NaN"
+        return "Infinity" if value > 0 else "-Infinity"
+    if isinstance(value, (PurePath, os.PathLike)):
+        return _json_safe(os.fspath(value))
+    if isinstance(value, (datetime, date)):
         return value.isoformat()
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        return bytes(value).hex()
+    if isinstance(value, BaseException):
+        return {"type": type(value).__name__, "message": str(value)}
     if is_dataclass(value) and not isinstance(value, type):
-        return {field.name: _json_safe(getattr(value, field.name)) for field in fields(value)}
+        return {
+            field.name: _json_safe(getattr(value, field.name))
+            for field in fields(value)
+        }
     if isinstance(value, Mapping):
         return {str(key): _json_safe(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple, set, frozenset)):
+    if isinstance(value, (set, frozenset)):
+        return [_json_safe(item) for item in sorted(value, key=repr)]
+    if isinstance(value, (list, tuple)):
         return [_json_safe(item) for item in value]
-    return value
+    return str(value)
 
 
 class JsonSerializable:

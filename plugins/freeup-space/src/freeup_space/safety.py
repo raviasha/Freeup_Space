@@ -8,7 +8,7 @@ import os
 import posixpath
 import stat
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Optional
 
 from .models import CandidateSnapshot, SafetyDecision
 from .policy import Policy
@@ -40,6 +40,13 @@ def _contains(path: str, root: str, platform: str) -> bool:
         return False
 
 
+def _is_windows_device_namespace(path: str) -> bool:
+    normalized_separators = path.replace("/", "\\").casefold()
+    return normalized_separators.startswith(
+        ("\\\\?\\", "\\\\.\\", "\\??\\", "\\\\??\\", "\\device\\")
+    )
+
+
 def is_protected(path: Path, policy: Policy, platform: str) -> SafetyDecision:
     """Classify a path using lexical normalization, never link resolution."""
 
@@ -48,19 +55,29 @@ def is_protected(path: Path, policy: Policy, platform: str) -> SafetyDecision:
         return SafetyDecision(False, "reject", "platform does not match safety policy")
 
     path_text = str(path)
+    if requested_platform == "windows" and _is_windows_device_namespace(path_text):
+        return SafetyDecision(
+            False, "reject", "Win32 device and extended path namespaces are not allowed"
+        )
     normalize = _normalizer(requested_platform)
     normalized = normalize(path_text)
     if requested_platform == "windows":
         drive, tail = ntpath.splitdrive(normalized)
         if drive and tail in ("", "\\"):
             return SafetyDecision(False, "reject", "filesystem roots are never actionable")
+        if drive.startswith("\\\\"):
+            return SafetyDecision(False, "reject", "UNC paths require a separate policy")
+        if not drive or not tail.startswith("\\"):
+            return SafetyDecision(False, "reject", "Windows target must be drive-absolute")
     elif normalized == "/":
         return SafetyDecision(False, "reject", "filesystem roots are never actionable")
     for protected_file in policy.protected_files:
-        if normalized == normalize(protected_file):
+        candidate = tail if requested_platform == "windows" else normalized
+        if candidate == normalize(protected_file):
             return SafetyDecision(False, "report-only", "path is an OS-managed file")
     for protected_root in policy.protected_roots:
-        if _contains(normalized, protected_root, requested_platform):
+        candidate = tail if requested_platform == "windows" else normalized
+        if _contains(candidate, protected_root, requested_platform):
             return SafetyDecision(
                 False,
                 "report-only",
@@ -95,6 +112,45 @@ def _digest(path: Path) -> str:
         for block in iter(lambda: source.read(1024 * 1024), b""):
             hasher.update(block)
     return hasher.hexdigest()
+
+
+def _is_recognized_safe_root(path: Path, policy: Policy) -> bool:
+    normalize = _normalizer(policy.platform)
+    normalized = normalize(str(path))
+    return any(normalized == normalize(root) for root in policy.safe_roots)
+
+
+def _unsafe_directory_content(
+    path: Path, policy: Policy, expected_device: int
+) -> Optional[str]:
+    pending = [path]
+    while pending:
+        directory = pending.pop()
+        try:
+            entries = os.scandir(directory)
+        except OSError as error:
+            return "directory content cannot be inspected: {}".format(error)
+        with entries:
+            for entry in entries:
+                entry_path = Path(entry.path)
+                try:
+                    entry_stat = entry.stat(follow_symlinks=False)
+                except OSError as error:
+                    return "directory content cannot be inspected: {}".format(error)
+                if stat.S_ISLNK(entry_stat.st_mode) or (
+                    getattr(entry_stat, "st_file_attributes", 0) & 0x400
+                ):
+                    return "directory contains a link or reparse point"
+                if entry_stat.st_dev != expected_device:
+                    return "directory contains content on an unexpected filesystem"
+                protected = is_protected(entry_path, policy, policy.platform)
+                if not protected.actionable:
+                    return "directory contains protected content: {}".format(
+                        protected.reason
+                    )
+                if stat.S_ISDIR(entry_stat.st_mode):
+                    pending.append(entry_path)
+    return None
 
 
 def validate_target(
@@ -137,6 +193,24 @@ def validate_target(
 
     if _has_link_component(path):
         return SafetyDecision(False, "reject", "target or a parent is a link or reparse point")
+
+    if stat.S_ISDIR(current.st_mode):
+        if snapshot.safe_root is None:
+            return SafetyDecision(
+                False, "reject", "directory candidates require a recognized safe root"
+            )
+        if not _is_recognized_safe_root(snapshot.safe_root, policy):
+            return SafetyDecision(
+                False, "reject", "directory safe root is not recognized by policy"
+            )
+        normalize = _normalizer(policy.platform)
+        if normalize(str(path)) == normalize(str(snapshot.safe_root)):
+            return SafetyDecision(
+                False, "reject", "a recognized safe root cannot itself be removed"
+            )
+        unsafe_content = _unsafe_directory_content(path, policy, current.st_dev)
+        if unsafe_content is not None:
+            return SafetyDecision(False, "reject", unsafe_content)
 
     if (
         current.st_dev != snapshot.st_dev

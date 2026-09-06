@@ -102,3 +102,81 @@ def test_workspace_root_is_rejected_even_when_snapshot_matches(tmp_path):
     assert decision.actionable is False
     assert decision.outcome == "reject"
     assert "workspace" in decision.reason.lower()
+
+
+def test_directory_candidate_requires_safe_root(tmp_path):
+    target = tmp_path / "candidate"
+    target.mkdir()
+
+    decision = validate_target(
+        target, Policy.for_platform("macos"), snapshot_for(target)
+    )
+
+    assert decision.actionable is False
+    assert "safe root" in decision.reason.lower()
+
+
+def test_directory_safe_root_must_be_recognized_by_policy(tmp_path):
+    safe_root = tmp_path / "unrecognized"
+    target = safe_root / "candidate"
+    target.mkdir(parents=True)
+
+    decision = validate_target(
+        target,
+        Policy.for_platform("macos"),
+        snapshot_for(target, safe_root=safe_root),
+    )
+
+    assert decision.actionable is False
+    assert "recognized" in decision.reason.lower()
+
+
+def test_directory_with_link_content_is_rejected(tmp_path):
+    safe_root = tmp_path / "safe"
+    target = safe_root / "candidate"
+    target.mkdir(parents=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (target / "alias").symlink_to(outside, target_is_directory=True)
+    policy = replace(Policy.for_platform("macos"), safe_roots=(str(safe_root),))
+
+    decision = validate_target(
+        target, policy, snapshot_for(target, safe_root=safe_root)
+    )
+
+    assert decision.actionable is False
+    assert "link" in decision.reason.lower()
+
+
+def test_directory_with_nested_protected_content_is_rejected(tmp_path):
+    safe_root = tmp_path / "safe"
+    target = safe_root / "candidate"
+    protected = target / "system-managed"
+    protected.mkdir(parents=True)
+    policy = replace(
+        Policy.for_platform("macos"),
+        protected_roots=(str(protected),),
+        safe_roots=(str(safe_root),),
+    )
+
+    decision = validate_target(
+        target, policy, snapshot_for(target, safe_root=safe_root)
+    )
+
+    assert decision.actionable is False
+    assert "protected" in decision.reason.lower()
+
+
+def test_clean_directory_below_recognized_safe_root_is_allowed(tmp_path):
+    safe_root = tmp_path / "safe"
+    target = safe_root / "candidate"
+    target.mkdir(parents=True)
+    (target / "ordinary.bin").write_bytes(b"content")
+    policy = replace(Policy.for_platform("macos"), safe_roots=(str(safe_root),))
+
+    decision = validate_target(
+        target, policy, snapshot_for(target, safe_root=safe_root)
+    )
+
+    assert decision.actionable is True
+    assert decision.outcome == "allow"
