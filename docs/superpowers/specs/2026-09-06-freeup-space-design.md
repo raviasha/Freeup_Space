@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Freeup Space is a Codex plugin for auditing storage on macOS and Windows, presenting deletion candidates for human review, and moving only explicitly approved items to Trash or Recycle Bin.
+Freeup Space is a Codex plugin for auditing storage on macOS and Windows, presenting deletion candidates for human review, and moving only explicitly approved items to Trash or Recycle Bin. The Git repository is also a repo-local marketplace; the installable plugin package lives at `plugins/freeup-space/` so its marketplace source path remains `./plugins/freeup-space`.
 
 The first release scans every readable local volume for reclaimable space while preventing direct deletion of operating-system files, installed application bundles, active databases, backups, restore data, or other system-managed content. These protected categories may appear in the report but cannot enter an executable cleanup plan.
 
@@ -36,24 +36,25 @@ The repository will contain a skills-and-scripts plugin. It does not require an 
 
 ```text
 Freeup_Space/
-|-- .codex-plugin/plugin.json
 |-- .agents/plugins/marketplace.json
-|-- skills/
-|   |-- freeing-up-space/
-|   |-- finding-duplicates/
-|   |-- finding-old-files/
-|   |-- reviewing-cleanup-candidates/
-|   |-- trashing-approved-files/
-|   `-- permanently-deleting-approved-files/
-|-- src/freeup_space/
-|-- tests/
-|-- examples/
 |-- docs/
-|-- README.md
-|-- SECURITY.md
-|-- CONTRIBUTING.md
-|-- LICENSE
-`-- pyproject.toml
+`-- plugins/freeup-space/
+    |-- .codex-plugin/plugin.json
+    |-- skills/
+    |   |-- freeing-up-space/
+    |   |-- finding-duplicates/
+    |   |-- finding-old-files/
+    |   |-- reviewing-cleanup-candidates/
+    |   |-- trashing-approved-files/
+    |   `-- permanently-deleting-approved-files/
+    |-- src/freeup_space/
+    |-- tests/
+    |-- examples/
+    |-- README.md
+    |-- SECURITY.md
+    |-- CONTRIBUTING.md
+    |-- LICENSE
+    `-- pyproject.toml
 ```
 
 ### Skills
