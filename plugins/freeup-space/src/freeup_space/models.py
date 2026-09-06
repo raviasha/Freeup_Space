@@ -220,6 +220,20 @@ class FileRecord(JsonSerializable):
 
 
 @dataclass(frozen=True)
+class Evidence(JsonSerializable):
+    """One additive, read-only reason that a file belongs in an audit report."""
+
+    path: Path
+    category: str
+    rule: str
+    reason: str
+    risk: Risk
+    actionable: bool
+    size: int
+    details: Mapping[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class ScanError(JsonSerializable):
     """A bounded, serializable filesystem error captured during a scan."""
 

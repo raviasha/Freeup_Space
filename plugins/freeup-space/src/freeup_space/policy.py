@@ -24,6 +24,12 @@ _CATEGORY_RULES = MappingProxyType(
         "log": CategoryRule(Risk.LOW, True, "diagnostic log data"),
         "duplicate": CategoryRule(Risk.MEDIUM, True, "confirmed duplicate"),
         "old-file": CategoryRule(Risk.MEDIUM, True, "old user or tool data"),
+        "download": CategoryRule(Risk.MEDIUM, True, "downloaded user data"),
+        "archive": CategoryRule(Risk.MEDIUM, True, "archive or disk image"),
+        "installer": CategoryRule(Risk.MEDIUM, True, "downloaded installer"),
+        "developer-artifact": CategoryRule(
+            Risk.MEDIUM, True, "reproducible developer artifact"
+        ),
         "personal-data": CategoryRule(Risk.HIGH, True, "valuable user data"),
         "system-managed": CategoryRule(
             Risk.REPORT_ONLY, False, "operating-system managed data"
