@@ -44,8 +44,13 @@ def permanently_delete(plan: CleanupPlan, ids: Iterable[str], platform: str) -> 
 
     if selection.action.value != "permanent-delete":
         raise ApprovalError("permanent delete requires a permanent-delete plan")
-    if set(selection.candidate_ids) != {candidate.candidate_id for candidate in plan.candidates}:
-        raise ApprovalError("permanent delete requires exact candidate IDs")
+    actionable_ids = {
+        candidate.candidate_id
+        for candidate in plan.candidates
+        if candidate.actionable and candidate.risk.value != "report-only"
+    }
+    if set(selection.candidate_ids) != actionable_ids:
+        raise ApprovalError("permanent delete requires exact actionable candidate IDs")
 
     policy = Policy.for_platform(platform)
     free_root = Path(selection.candidates[0].path).resolve(strict=False).anchor or "/"
