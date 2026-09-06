@@ -37,6 +37,7 @@ jobs:
           python -m build
 
       - name: Run tests
+        working-directory: plugins/freeup-space
         run: |
           python -m pytest -q
 
@@ -61,7 +62,7 @@ jobs:
           python - <<'PY'
           from pathlib import Path
 
-          for skill in sorted(Path("skills").glob("*/SKILL.md")):
+          for skill in sorted(Path("plugins/freeup-space/skills").glob("*/SKILL.md")):
               text = skill.read_text(encoding="utf-8")
               assert text.startswith("---\n")
               assert "freeup-space" in text
