@@ -155,7 +155,7 @@ def test_ancestor_replaced_by_symlink_to_same_tree_is_not_traversed(tmp_path):
     assert run.errors
 
 
-def test_fallback_revalidates_each_ancestor_without_following_links(
+def test_fallback_fails_closed_when_no_race_resistant_directory_api(
     tmp_path, monkeypatch
 ):
     ancestor = tmp_path / "a"
@@ -185,7 +185,74 @@ def test_fallback_revalidates_each_ancestor_without_following_links(
 
     assert not any(file.path.name == "payload.bin" for file in run.files)
     assert run.complete is False
-    assert run.errors
+    assert run.errors[0].operation == "unsupported-no-follow"
+
+
+def test_fallback_does_not_accept_entries_from_swap_restored_during_scandir(
+    tmp_path, monkeypatch
+):
+    ancestor = tmp_path / "a"
+    ancestor.mkdir()
+    (ancestor / "inside.bin").write_bytes(b"inside")
+    outside = tmp_path.parent / "outside-aba-race-fixture"
+    outside.mkdir()
+    (outside / "outside-only.bin").write_bytes(b"outside")
+    moved = tmp_path.parent / "moved-aba-race-fixture"
+    monkeypatch.setattr(scanner.os, "supports_fd", set())
+
+    class SwapAndRestoreIterator:
+        def __init__(self, path: Path):
+            ancestor.rename(moved)
+            ancestor.symlink_to(outside, target_is_directory=True)
+            self.iterator = os.scandir(path)
+            self.restored = False
+
+        def __enter__(self):
+            return self
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            try:
+                return next(self.iterator)
+            except StopIteration:
+                self.restore()
+                raise
+
+        def __exit__(self, error_type, error, traceback):
+            self.restore()
+
+        def restore(self):
+            if self.restored:
+                return
+            self.iterator.close()
+            ancestor.unlink()
+            moved.rename(ancestor)
+            self.restored = True
+
+    class SwapAndRestoreAdapter(FilesystemAdapter):
+        scandir_attempted = False
+
+        def scandir(self, path: Path):
+            if path == ancestor:
+                self.scandir_attempted = True
+                return SwapAndRestoreIterator(path)
+            return super().scandir(path)
+
+    adapter = SwapAndRestoreAdapter()
+    run = scan_paths(
+        [tmp_path],
+        Policy.for_platform("windows"),
+        lambda _: None,
+        Event(),
+        adapter=adapter,
+    )
+
+    assert not any(file.path.name == "outside-only.bin" for file in run.files)
+    assert run.complete is False
+    assert run.errors[0].operation == "unsupported-no-follow"
+    assert adapter.scandir_attempted is False
 
 
 def test_scanner_cancellation_marks_run_incomplete_and_reports_final_progress(tmp_path):

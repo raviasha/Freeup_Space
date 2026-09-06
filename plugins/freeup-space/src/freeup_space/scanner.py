@@ -18,6 +18,10 @@ from .policy import Policy
 _FILE_ATTRIBUTE_REPARSE_POINT = 0x400
 
 
+class UnsupportedNoFollowError(OSError):
+    """Raised when the host cannot atomically enumerate without following links."""
+
+
 class FilesystemAdapter:
     """Narrow filesystem seam used by traversal and platform fault handling."""
 
@@ -57,15 +61,11 @@ class FilesystemAdapter:
                 _close_descriptors(descriptors)
             return directory_stat, entries, errors
 
-        prefixes = _directory_prefixes(path)
-        before_chain = [self.lstat(prefix) for prefix in prefixes]
-        _require_valid_chain(path, before_chain)
-        _require_same_directory(path, expected_stat, before_chain[-1])
-        entries, errors = self._read_entries(path, self.scandir(path))
-        after_chain = [self.lstat(prefix) for prefix in prefixes]
-        _require_valid_chain(path, after_chain)
-        _require_same_chain(path, before_chain, after_chain)
-        return after_chain[-1], entries, errors
+        raise UnsupportedNoFollowError(
+            errno.ENOTSUP,
+            "race-resistant no-follow directory scanning is unavailable",
+            str(path),
+        )
 
     def _read_entries(self, directory: Path, iterator):
         entries = []
@@ -277,7 +277,12 @@ def scan_paths(
                 path, path_stat
             )
         except OSError as error:
-            record_error(path, "open-directory", error)
+            operation = (
+                "unsupported-no-follow"
+                if isinstance(error, UnsupportedNoFollowError)
+                else "open-directory"
+            )
+            record_error(path, operation, error)
             report(path)
             continue
         directory_identity = (
