@@ -11,6 +11,11 @@ class PermissionFaultAdapter(FilesystemAdapter):
     def __init__(self, blocked: Path):
         self.blocked = blocked
 
+    def scan_directory(self, path: Path, expected_stat):
+        if path == self.blocked:
+            raise PermissionError("fixture denied access")
+        return super().scan_directory(path, expected_stat)
+
     def scandir(self, path: Path):
         if path == self.blocked:
             raise PermissionError("fixture denied access")
@@ -21,9 +26,9 @@ class ReparseFaultAdapter(FilesystemAdapter):
     def __init__(self, reparse_path: Path):
         self.reparse_path = reparse_path
 
-    def lstat(self, path: Path):
-        result = super().lstat(path)
-        if path == self.reparse_path:
+    def stat_entry(self, directory: Path, entry):
+        result = super().stat_entry(directory, entry)
+        if directory / entry.name == self.reparse_path:
             values = {
                 name: getattr(result, name)
                 for name in dir(result)
@@ -64,7 +69,7 @@ def test_permission_error_is_recorded_and_scan_continues(tmp_path):
 
     assert {error.path for error in run.errors} == {blocked}
     assert {file.path for file in run.files} == {ok}
-    assert run.complete is True
+    assert run.complete is False
 
 
 def test_scanner_excludes_windows_reparse_points(tmp_path):
@@ -83,6 +88,39 @@ def test_scanner_excludes_windows_reparse_points(tmp_path):
     )
 
     assert {file.path for file in run.files} == {ordinary}
+
+
+def test_directory_replaced_by_symlink_after_lstat_is_not_traversed(tmp_path):
+    victim = tmp_path / "victim"
+    victim.mkdir()
+    (victim / "inside.bin").write_bytes(b"inside")
+    outside = tmp_path.parent / "outside-race-fixture"
+    outside.mkdir(exist_ok=True)
+    outside_file = outside / "outside.bin"
+    outside_file.write_bytes(b"outside")
+
+    class ReplacementRaceAdapter(FilesystemAdapter):
+        replaced = False
+
+        def scan_directory(self, path: Path, expected_stat):
+            if path == victim and not self.replaced:
+                self.replaced = True
+                victim.rename(tmp_path / "original-victim")
+                victim.symlink_to(outside, target_is_directory=True)
+            return super().scan_directory(path, expected_stat)
+
+    run = scan_paths(
+        [tmp_path],
+        Policy.for_platform("macos"),
+        lambda _: None,
+        Event(),
+        adapter=ReplacementRaceAdapter(),
+    )
+
+    assert outside_file not in {file.path for file in run.files}
+    assert not any(file.path.parent == victim for file in run.files)
+    assert run.complete is False
+    assert {error.path for error in run.errors} == {victim}
 
 
 def test_scanner_cancellation_marks_run_incomplete_and_reports_final_progress(tmp_path):
@@ -147,10 +185,10 @@ def test_error_collection_is_bounded(tmp_path):
         blocked.append(path)
 
     class ManyPermissionFaults(FilesystemAdapter):
-        def scandir(self, path: Path):
+        def scan_directory(self, path: Path, expected_stat):
             if path in blocked:
                 raise PermissionError("denied")
-            return super().scandir(path)
+            return super().scan_directory(path, expected_stat)
 
     run = scan_paths(
         [tmp_path],
@@ -162,4 +200,21 @@ def test_error_collection_is_bounded(tmp_path):
     )
 
     assert len(run.errors) == 2
-    assert run.complete is True
+    assert run.complete is False
+
+
+def test_unrecorded_error_after_limit_still_marks_scan_incomplete(tmp_path):
+    blocked = tmp_path / "blocked"
+    blocked.mkdir()
+
+    run = scan_paths(
+        [tmp_path],
+        Policy.for_platform("macos"),
+        lambda _: None,
+        Event(),
+        adapter=PermissionFaultAdapter(blocked),
+        max_errors=0,
+    )
+
+    assert run.errors == ()
+    assert run.complete is False

@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import ctypes
+import os
 import plistlib
 import re
+import stat
 import subprocess
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Tuple
@@ -74,6 +76,19 @@ def _unescape_mount_path(value: str) -> str:
     )
 
 
+def _is_readable_volume(path: Path) -> bool:
+    try:
+        path_stat = os.lstat(path)
+    except OSError:
+        return False
+    return (
+        stat.S_ISDIR(path_stat.st_mode)
+        and not stat.S_ISLNK(path_stat.st_mode)
+        and not bool(getattr(path_stat, "st_file_attributes", 0) & 0x400)
+        and os.access(path, os.R_OK | os.X_OK)
+    )
+
+
 def _macos_volumes() -> List[Volume]:
     volumes = []
     seen_devices = set()
@@ -97,7 +112,14 @@ def _macos_volumes() -> List[Volume]:
         if device in seen_devices or path in seen_paths:
             continue
         info = _diskutil_info(path)
-        removable = bool(info.get("RemovableMedia", False))
+        if not (
+            type(info.get("Internal")) is bool
+            and type(info.get("RemovableMedia")) is bool
+        ):
+            continue
+        if not _is_readable_volume(path):
+            continue
+        removable = info["RemovableMedia"]
         name = info.get("VolumeName") or path.name or "/"
         volume_id = info.get("VolumeUUID") or info.get("DiskUUID") or device
         volumes.append(
@@ -116,18 +138,48 @@ def _macos_volumes() -> List[Volume]:
     return volumes
 
 
-def _windows_volume_api() -> Tuple[Callable[[], int], Callable[[str], int]]:
+def _windows_volume_api() -> Tuple[
+    Callable[[], int], Callable[[str], int], Callable[[str], bool]
+]:
     kernel32 = ctypes.windll.kernel32
     get_logical_drives = kernel32.GetLogicalDrives
     get_logical_drives.restype = ctypes.c_uint32
     get_drive_type = kernel32.GetDriveTypeW
     get_drive_type.argtypes = [ctypes.c_wchar_p]
     get_drive_type.restype = ctypes.c_uint
-    return get_logical_drives, get_drive_type
+    get_volume_information = kernel32.GetVolumeInformationW
+    dword_pointer = ctypes.POINTER(ctypes.c_uint32)
+    get_volume_information.argtypes = [
+        ctypes.c_wchar_p,
+        ctypes.c_wchar_p,
+        ctypes.c_uint32,
+        dword_pointer,
+        dword_pointer,
+        dword_pointer,
+        ctypes.c_wchar_p,
+        ctypes.c_uint32,
+    ]
+    get_volume_information.restype = ctypes.c_int
+
+    def is_ready(root: str) -> bool:
+        return bool(
+            get_volume_information(
+                root,
+                None,
+                0,
+                None,
+                None,
+                None,
+                None,
+                0,
+            )
+        )
+
+    return get_logical_drives, get_drive_type, is_ready
 
 
 def _windows_volumes() -> List[Volume]:
-    get_logical_drives, get_drive_type = _windows_volume_api()
+    get_logical_drives, get_drive_type, is_ready = _windows_volume_api()
     mask = get_logical_drives()
     if mask == 0:
         raise OSError("GetLogicalDrives failed")
@@ -137,7 +189,7 @@ def _windows_volumes() -> List[Volume]:
             continue
         root = "{}:\\".format(chr(ord("A") + index))
         drive_type = get_drive_type(root)
-        if drive_type not in (2, 3):
+        if drive_type not in (2, 3) or not is_ready(root):
             continue
         volumes.append(
             Volume(

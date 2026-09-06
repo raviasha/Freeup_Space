@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import os
 import stat
 from datetime import datetime, timezone
@@ -25,6 +26,59 @@ class FilesystemAdapter:
 
     def scandir(self, path: Path):
         return os.scandir(path)
+
+    def stat_entry(self, directory: Path, entry):
+        return entry.stat(follow_symlinks=False)
+
+    def scan_directory(self, path: Path, expected_stat):
+        """Open and snapshot one unchanged directory without following its leaf."""
+
+        if (
+            hasattr(os, "O_DIRECTORY")
+            and hasattr(os, "O_NOFOLLOW")
+            and os.scandir in os.supports_fd
+        ):
+            flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+            descriptor = os.open(path, flags)
+            try:
+                directory_stat = os.fstat(descriptor)
+                _require_same_directory(path, expected_stat, directory_stat)
+                entries, errors = self._read_entries(path, os.scandir(descriptor))
+            finally:
+                os.close(descriptor)
+            return directory_stat, entries, errors
+
+        before = self.lstat(path)
+        _require_same_directory(path, expected_stat, before)
+        entries, errors = self._read_entries(path, self.scandir(path))
+        after = self.lstat(path)
+        _require_same_directory(path, before, after)
+        return after, entries, errors
+
+    def _read_entries(self, directory: Path, iterator):
+        entries = []
+        errors = []
+        with iterator:
+            for entry in iterator:
+                try:
+                    entry_stat = self.stat_entry(directory, entry)
+                except OSError as error:
+                    errors.append((directory / entry.name, error))
+                    continue
+                entries.append((entry.name, entry_stat))
+        entries.sort(key=lambda item: item[0])
+        return entries, errors
+
+
+def _require_same_directory(path: Path, expected_stat, actual_stat) -> None:
+    expected_identity = (int(expected_stat.st_dev), int(expected_stat.st_ino))
+    actual_identity = (int(actual_stat.st_dev), int(actual_stat.st_ino))
+    if (
+        expected_identity != actual_identity
+        or not stat.S_ISDIR(actual_stat.st_mode)
+        or _is_link_or_reparse(actual_stat)
+    ):
+        raise OSError(errno.ESTALE, "directory changed during scan", str(path))
 
 
 def _is_link_or_reparse(stat_result) -> bool:
@@ -91,7 +145,8 @@ def scan_paths(
     directories_scanned = 0
     bytes_scanned = 0
     skipped_links = 0
-    pending = [(Path(root), None) for root in reversed(tuple(roots))]
+    errors_encountered = 0
+    pending = [(Path(root), None, None) for root in reversed(tuple(roots))]
 
     def report(current_path: Optional[Path], complete: bool = False) -> None:
         progress(
@@ -99,7 +154,7 @@ def scan_paths(
                 files_scanned=len(files),
                 bytes_scanned=bytes_scanned,
                 directories_scanned=directories_scanned,
-                errors=len(errors),
+                errors=errors_encountered,
                 skipped_links=skipped_links,
                 complete=complete,
                 cancelled=cancel.is_set(),
@@ -108,6 +163,8 @@ def scan_paths(
         )
 
     def record_error(path: Path, operation: str, error: OSError) -> None:
+        nonlocal errors_encountered
+        errors_encountered += 1
         if len(errors) < max_errors:
             errors.append(
                 ScanError(
@@ -119,13 +176,16 @@ def scan_paths(
             )
 
     while pending and not cancel.is_set():
-        path, root_device = pending.pop()
-        try:
-            path_stat = filesystem.lstat(path)
-        except OSError as error:
-            record_error(path, "lstat", error)
-            report(path)
-            continue
+        path, root_device, expected_stat = pending.pop()
+        if expected_stat is None:
+            try:
+                path_stat = filesystem.lstat(path)
+            except OSError as error:
+                record_error(path, "lstat", error)
+                report(path)
+                continue
+        else:
+            path_stat = expected_stat
 
         if _is_link_or_reparse(path_stat):
             skipped_links += 1
@@ -149,24 +209,31 @@ def scan_paths(
         if int(path_stat.st_dev) != expected_device or identity in seen_directories:
             report(path)
             continue
-        seen_directories.add(identity)
-        directories_scanned += 1
         try:
-            iterator = filesystem.scandir(path)
-            with iterator:
-                child_paths = sorted(
-                    (Path(entry.path) for entry in iterator), key=lambda item: item.name
-                )
+            directory_stat, entries, entry_errors = filesystem.scan_directory(
+                path, path_stat
+            )
         except OSError as error:
-            record_error(path, "scandir", error)
+            record_error(path, "open-directory", error)
             report(path)
             continue
-        for child_path in reversed(child_paths):
-            pending.append((child_path, expected_device))
+        directory_identity = (
+            int(directory_stat.st_dev),
+            int(directory_stat.st_ino),
+        )
+        if directory_identity in seen_directories:
+            report(path)
+            continue
+        seen_directories.add(directory_identity)
+        directories_scanned += 1
+        for error_path, error in entry_errors:
+            record_error(error_path, "lstat", error)
+        for name, entry_stat in reversed(entries):
+            pending.append((path / name, expected_device, entry_stat))
         report(path)
 
     completed_at = datetime.now(timezone.utc)
-    complete = not cancel.is_set()
+    complete = not cancel.is_set() and errors_encountered == 0
     report(None, complete=complete)
     return ScanRun(
         run_id=uuid4().hex,

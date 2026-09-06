@@ -17,6 +17,7 @@ def test_macos_enumeration_keeps_local_volumes_and_excludes_network_mounts(
         )
     )
     monkeypatch.setattr(volumes, "_mount_output", lambda: mount_output)
+    monkeypatch.setattr(volumes, "_is_readable_volume", lambda path: True)
     monkeypatch.setattr(
         volumes,
         "_diskutil_info",
@@ -49,7 +50,12 @@ def test_macos_enumeration_excludes_non_device_and_duplicate_mount_aliases(monke
             )
         ),
     )
-    monkeypatch.setattr(volumes, "_diskutil_info", lambda path: {})
+    monkeypatch.setattr(
+        volumes,
+        "_diskutil_info",
+        lambda path: {"Internal": True, "RemovableMedia": False},
+    )
+    monkeypatch.setattr(volumes, "_is_readable_volume", lambda path: True)
 
     found = volumes.enumerate_local_volumes("macos")
 
@@ -57,15 +63,20 @@ def test_macos_enumeration_excludes_non_device_and_duplicate_mount_aliases(monke
 
 
 def test_windows_enumeration_returns_only_fixed_and_removable_drives(monkeypatch):
-    # A:, C:, and Z: are present; Z: is a network drive.
+    # A: and B: are removable, but B: has no readable media; Z: is networked.
     monkeypatch.setattr(
         volumes,
         "_windows_volume_api",
-        lambda: (lambda: (1 << 0) | (1 << 2) | (1 << 25), lambda root: {
-            "A:\\": 2,
-            "C:\\": 3,
-            "Z:\\": 4,
-        }[root]),
+        lambda: (
+            lambda: (1 << 0) | (1 << 1) | (1 << 2) | (1 << 25),
+            lambda root: {
+                "A:\\": 2,
+                "B:\\": 2,
+                "C:\\": 3,
+                "Z:\\": 4,
+            }[root],
+            lambda root: root != "B:\\",
+        ),
     )
 
     found = volumes.enumerate_local_volumes("win32")
@@ -74,6 +85,36 @@ def test_windows_enumeration_returns_only_fixed_and_removable_drives(monkeypatch
         ("A:\\", "removable"),
         ("C:\\", "fixed"),
     ]
+
+
+def test_macos_enumeration_rejects_mount_with_unverified_diskutil_metadata(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        volumes,
+        "_mount_output",
+        lambda: "/dev/disk9s1 on /Volumes/Unknown (apfs, local)",
+    )
+    monkeypatch.setattr(volumes, "_diskutil_info", lambda path: {})
+    monkeypatch.setattr(volumes, "_is_readable_volume", lambda path: True)
+
+    assert volumes.enumerate_local_volumes("macos") == []
+
+
+def test_macos_enumeration_rejects_unreadable_volume(monkeypatch):
+    monkeypatch.setattr(
+        volumes,
+        "_mount_output",
+        lambda: "/dev/disk9s1 on /Volumes/Locked (apfs, local)",
+    )
+    monkeypatch.setattr(
+        volumes,
+        "_diskutil_info",
+        lambda path: {"Internal": False, "RemovableMedia": True},
+    )
+    monkeypatch.setattr(volumes, "_is_readable_volume", lambda path: False)
+
+    assert volumes.enumerate_local_volumes("macos") == []
 
 
 def test_volume_enumeration_rejects_unsupported_platform():
