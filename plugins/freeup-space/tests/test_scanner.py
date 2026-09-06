@@ -190,6 +190,7 @@ def test_fallback_fails_closed_when_no_race_resistant_directory_api(
     assert run.errors[0].operation == "unsupported-no-follow"
 
 
+@pytest.mark.skipif(os.name == "nt", reason="Windows uses native handles, not POSIX directory descriptors")
 def test_fallback_does_not_accept_entries_from_swap_restored_during_scandir(
     tmp_path, monkeypatch
 ):
@@ -296,6 +297,43 @@ def test_scanner_reports_metadata_progress_and_never_opens_file_contents(tmp_pat
     assert updates[-1].files_scanned == 1
     assert updates[-1].bytes_scanned == 7
     assert updates[-1].complete is True
+
+
+def test_nested_files_keep_distinct_real_filesystem_identities(tmp_path):
+    child = tmp_path / "nested"
+    child.mkdir()
+    targets = [tmp_path / "one.bin", child / "two.bin", child / "three.bin"]
+    for target in targets:
+        target.write_bytes(b"same contents, separate files")
+
+    run = scan_paths(
+        [tmp_path], Policy.for_platform("macos"), lambda _: None, Event()
+    )
+
+    assert run.complete is True
+    assert {record.path for record in run.files} == set(targets)
+    assert len({record.file_id for record in run.files}) == len(targets)
+    for record in run.files:
+        current = os.lstat(record.path)
+        assert (record.st_dev, record.st_ino) == (current.st_dev, current.st_ino)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="native Windows directory locking")
+def test_windows_directory_handle_blocks_ancestor_rename(tmp_path):
+    from freeup_space.windows_fs import locked_directory
+
+    ancestor = tmp_path / "ancestor"
+    child = ancestor / "nested"
+    child.mkdir(parents=True)
+    moved = tmp_path / "moved"
+    with locked_directory(child):
+        with pytest.raises(OSError):
+            ancestor.rename(moved)
+        assert child.is_dir()
+
+    # Closing all handles releases the lock.
+    ancestor.rename(moved)
+    assert (moved / "nested").is_dir()
 
 
 def test_overlapping_roots_do_not_duplicate_physical_files(tmp_path):

@@ -130,7 +130,10 @@ def _unsafe_directory_content(
             for entry in entries:
                 entry_path = Path(entry.path)
                 try:
-                    entry_stat = entry.stat(follow_symlinks=False)
+                    entry_stat = (
+                        os.lstat(entry_path) if os.name == "nt"
+                        else entry.stat(follow_symlinks=False)
+                    )
                 except OSError as error:
                     return "directory content cannot be inspected: {}".format(error)
                 if stat.S_ISLNK(entry_stat.st_mode) or (

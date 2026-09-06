@@ -32,6 +32,10 @@ class FilesystemAdapter:
         return os.scandir(path)
 
     def stat_entry(self, directory: Path, entry):
+        if os.name == "nt":
+            # Windows DirEntry.stat returns zero device/inode IDs. Read fresh
+            # no-follow metadata while scan_directory holds the parent chain.
+            return os.lstat(directory / entry.name)
         return entry.stat(follow_symlinks=False)
 
     def scan_directory(self, path: Path, expected_stat):
