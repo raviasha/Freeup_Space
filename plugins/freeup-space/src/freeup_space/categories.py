@@ -6,9 +6,9 @@ import ntpath
 import posixpath
 from dataclasses import replace
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, Iterable, List, Optional
 
-from .models import Evidence, FileRecord, Risk
+from .models import Evidence, EvidenceCandidate, FileRecord, Risk
 from .policy import Policy
 from .safety import is_protected
 
@@ -116,6 +116,7 @@ def classify(record: FileRecord, policy: Policy) -> List[Evidence]:
     or location heuristics never make OS-managed data actionable.
     """
 
+    findings: List[Evidence] = []
     protection = is_protected(record.path, policy, policy.platform)
     if not protection.actionable:
         category = (
@@ -128,9 +129,8 @@ def classify(record: FileRecord, policy: Policy) -> List[Evidence]:
             if protection.outcome == "report-only"
             else "rejected-path"
         )
-        return [_evidence(record, policy, category, rule, protection.reason)]
+        findings.append(_evidence(record, policy, category, rule, protection.reason))
 
-    findings: List[Evidence] = []
     safe_root = _safe_root(record.path, policy)
     root_kind = _root_kind(safe_root, policy.platform) if safe_root else None
     if root_kind is not None:
@@ -207,3 +207,54 @@ def classify(record: FileRecord, policy: Policy) -> List[Evidence]:
     ]
     findings.sort(key=lambda item: (-_RISK_ORDER[item.risk], item.rule))
     return findings
+
+
+def reconcile_evidence(
+    evidence: Iterable[Evidence], policy: Policy
+) -> List[EvidenceCandidate]:
+    """Collapse additive evidence to one policy-safe candidate per lexical path."""
+
+    grouped: Dict[str, List[Evidence]] = {}
+    for item in evidence:
+        key = _normalize(str(item.path), policy.platform)
+        grouped.setdefault(key, []).append(item)
+
+    candidates = []
+    for key in sorted(grouped):
+        items = sorted(grouped[key], key=lambda item: (item.rule, item.reason))
+        path = min((item.path for item in items), key=str)
+        sizes = {item.size for item in items}
+        consistent_size = len(sizes) == 1
+        size = next(iter(sizes)) if consistent_size else 0
+        fallback_rule = policy.category_rules["unclassified"]
+        category_rules = [
+            policy.category_rules.get(item.category, fallback_rule) for item in items
+        ]
+        risk = max(
+            [item.risk for item in items]
+            + [category_rule.risk for category_rule in category_rules],
+            key=lambda value: _RISK_ORDER[value],
+        )
+        actionable = (
+            consistent_size
+            and all(item.actionable for item in items)
+            and all(category_rule.actionable for category_rule in category_rules)
+        )
+        protection = is_protected(path, policy, policy.platform)
+        if not protection.actionable or not consistent_size:
+            risk = Risk.REPORT_ONLY
+            actionable = False
+        candidates.append(
+            EvidenceCandidate(
+                path=path,
+                categories=tuple(sorted({item.category for item in items})),
+                rules=tuple(item.rule for item in items),
+                reasons=tuple(item.reason for item in items),
+                risk=risk,
+                actionable=actionable,
+                size=size,
+                reclaimable_bytes=size if actionable else 0,
+                evidence=tuple(items),
+            )
+        )
+    return candidates

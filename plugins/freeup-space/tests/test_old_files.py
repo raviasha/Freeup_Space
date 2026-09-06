@@ -4,7 +4,7 @@ from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
-from freeup_space.categories import classify
+from freeup_space.categories import classify, reconcile_evidence
 from freeup_space.models import FileRecord, Risk
 from freeup_space.old_files import find_old_files
 from freeup_space.policy import Policy
@@ -76,22 +76,52 @@ def test_exact_calendar_month_boundary_is_included(tmp_path):
     assert [item.path for item in evidence] == [record.path]
 
 
-def test_overlap_evidence_keeps_one_logical_reclaimable_total(tmp_path):
+def test_old_protected_file_is_report_only(tmp_path):
     record = make_file_with_mtime(
-        tmp_path / "Downloads" / "old.zip", months_ago=13, size=10_000
+        tmp_path / "System" / "old.zip", months_ago=13, size=10_000
     )
     policy = replace(
         Policy.for_platform("macos"),
-        safe_roots=(str(tmp_path / "Downloads"),),
+        protected_roots=(str(tmp_path / "System"),),
     )
 
+    evidence = find_old_files([record], FIXED_NOW, policy=policy)
+
+    assert evidence[0].risk is Risk.REPORT_ONLY
+    assert evidence[0].actionable is False
+
+
+def test_old_backup_file_is_report_only(tmp_path):
+    record = make_file_with_mtime(
+        tmp_path / "Backups" / "old.zip", months_ago=13, size=10_000
+    )
+
+    evidence = find_old_files(
+        [record], FIXED_NOW, policy=Policy.for_platform("macos")
+    )
+
+    assert evidence[0].risk is Risk.REPORT_ONLY
+    assert evidence[0].actionable is False
+
+
+def test_overlapping_analyzers_emit_one_candidate_and_reclaimable_total(tmp_path):
+    downloads = tmp_path / "Downloads"
+    record = make_file_with_mtime(
+        downloads / "old.zip", months_ago=13, size=10_000
+    )
+    policy = replace(
+        Policy.for_platform("macos"), safe_roots=(str(downloads),)
+    )
     evidence = classify(record, policy) + find_old_files(
-        [record, record], FIXED_NOW
+        [record], FIXED_NOW, policy=policy
     )
 
-    assert {item.rule for item in evidence} == {
+    candidates = reconcile_evidence(evidence, policy)
+
+    assert len(candidates) == 1
+    assert candidates[0].rules == (
         "archive-extension",
         "download-location",
         "old-file-12-months",
-    }
-    assert sum({item.path: item.size for item in evidence}.values()) == 10_000
+    )
+    assert candidates[0].reclaimable_bytes == 10_000

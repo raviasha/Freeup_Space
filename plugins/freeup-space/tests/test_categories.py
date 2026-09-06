@@ -1,8 +1,8 @@
 from dataclasses import replace
 from pathlib import Path
 
-from freeup_space.categories import classify
-from freeup_space.models import FileRecord, Risk
+from freeup_space.categories import classify, reconcile_evidence
+from freeup_space.models import Evidence, FileRecord, Risk
 from freeup_space.policy import Policy
 
 
@@ -66,15 +66,17 @@ def test_cache_named_directory_outside_explicit_safe_roots_is_not_low_risk(tmp_p
     assert evidence[0].actionable is False
 
 
-def test_os_managed_path_remains_report_only_even_when_it_looks_like_a_log():
-    record = make_record(Path("/private/var/log/install.log"))
+def test_os_managed_path_retains_applicable_evidence_but_remains_report_only():
+    record = make_record(Path("/System/Library/archive.zip"))
 
     evidence = classify(record, Policy.for_platform("macos"))
 
-    assert len(evidence) == 1
-    assert evidence[0].category == "system-managed"
-    assert evidence[0].risk is Risk.REPORT_ONLY
-    assert evidence[0].actionable is False
+    assert {item.rule for item in evidence} == {
+        "archive-extension",
+        "protected-path",
+    }
+    assert all(item.risk is Risk.REPORT_ONLY for item in evidence)
+    assert all(item.actionable is False for item in evidence)
 
 
 def test_unknown_file_is_report_only_instead_of_becoming_actionable(tmp_path):
@@ -100,3 +102,24 @@ def test_report_only_match_cannot_be_downgraded_by_download_location(tmp_path):
     }
     assert all(item.risk is Risk.REPORT_ONLY for item in evidence)
     assert all(item.actionable is False for item in evidence)
+
+
+def test_reconciliation_rederives_report_only_boundary_from_policy(tmp_path):
+    path = tmp_path / "Backups" / "archive.zip"
+    incorrectly_labeled = Evidence(
+        path=path,
+        category="backup",
+        rule="external-backup-finding",
+        reason="backup data",
+        risk=Risk.MEDIUM,
+        actionable=True,
+        size=20_000,
+    )
+
+    candidate = reconcile_evidence(
+        [incorrectly_labeled], Policy.for_platform("macos")
+    )[0]
+
+    assert candidate.risk is Risk.REPORT_ONLY
+    assert candidate.actionable is False
+    assert candidate.reclaimable_bytes == 0

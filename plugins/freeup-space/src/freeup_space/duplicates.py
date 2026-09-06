@@ -131,12 +131,13 @@ def find_duplicates(
                 if before_hash is None:
                     continue
                 try:
-                    digest = hasher(record.path)
+                    claimed_digest = hasher(record.path)
+                    digest = sha256_hasher(record.path)
                 except (OSError, ValueError):
                     continue
                 if (
-                    isinstance(digest, str)
-                    and digest
+                    isinstance(claimed_digest, str)
+                    and claimed_digest == digest
                     and _current_snapshot(record) == before_hash
                 ):
                     by_digest[digest].append(record)

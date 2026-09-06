@@ -234,6 +234,21 @@ class Evidence(JsonSerializable):
 
 
 @dataclass(frozen=True)
+class EvidenceCandidate(JsonSerializable):
+    """All evidence and one reclaimable total for one report candidate."""
+
+    path: Path
+    categories: Tuple[str, ...]
+    rules: Tuple[str, ...]
+    reasons: Tuple[str, ...]
+    risk: Risk
+    actionable: bool
+    size: int
+    reclaimable_bytes: int
+    evidence: Tuple[Evidence, ...] = ()
+
+
+@dataclass(frozen=True)
 class ScanError(JsonSerializable):
     """A bounded, serializable filesystem error captured during a scan."""
 

@@ -75,6 +75,14 @@ def test_partial_fingerprint_collision_is_resolved_by_full_hash(tmp_path):
     assert find_duplicates([a, b], sha256_hasher) == []
 
 
+def test_non_sha256_hasher_cannot_confirm_partial_fingerprint_collision(tmp_path):
+    edge = b"x" * (64 * 1024)
+    a = make_file(tmp_path / "a.bin", edge + b"aaaa" + edge)
+    b = make_file(tmp_path / "b.bin", edge + b"bbbb" + edge)
+
+    assert find_duplicates([a, b], lambda _: "a" * 64) == []
+
+
 def test_full_hasher_runs_only_for_partial_fingerprint_survivors(tmp_path):
     a = make_file(tmp_path / "a.bin", b"same")
     b = make_file(tmp_path / "b.bin", b"same")
