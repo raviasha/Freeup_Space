@@ -3,6 +3,7 @@ from pathlib import Path
 from threading import Event
 from types import SimpleNamespace
 
+from freeup_space import scanner
 from freeup_space.policy import Policy
 from freeup_space.scanner import FilesystemAdapter, scan_paths
 
@@ -121,6 +122,70 @@ def test_directory_replaced_by_symlink_after_lstat_is_not_traversed(tmp_path):
     assert not any(file.path.parent == victim for file in run.files)
     assert run.complete is False
     assert {error.path for error in run.errors} == {victim}
+
+
+def test_ancestor_replaced_by_symlink_to_same_tree_is_not_traversed(tmp_path):
+    ancestor = tmp_path / "a"
+    child = ancestor / "b"
+    child.mkdir(parents=True)
+    payload = child / "payload.bin"
+    payload.write_bytes(b"outside after move")
+    moved = tmp_path.parent / "moved-ancestor-race-fixture"
+
+    class AncestorReplacementAdapter(FilesystemAdapter):
+        replaced = False
+
+        def scan_directory(self, path: Path, expected_stat):
+            if path == child and not self.replaced:
+                self.replaced = True
+                ancestor.rename(moved)
+                ancestor.symlink_to(moved, target_is_directory=True)
+            return super().scan_directory(path, expected_stat)
+
+    run = scan_paths(
+        [tmp_path],
+        Policy.for_platform("macos"),
+        lambda _: None,
+        Event(),
+        adapter=AncestorReplacementAdapter(),
+    )
+
+    assert not any(file.path.name == "payload.bin" for file in run.files)
+    assert run.complete is False
+    assert run.errors
+
+
+def test_fallback_revalidates_each_ancestor_without_following_links(
+    tmp_path, monkeypatch
+):
+    ancestor = tmp_path / "a"
+    child = ancestor / "b"
+    child.mkdir(parents=True)
+    (child / "payload.bin").write_bytes(b"outside after move")
+    moved = tmp_path.parent / "moved-fallback-race-fixture"
+    monkeypatch.setattr(scanner.os, "supports_fd", set())
+
+    class AncestorReplacementAdapter(FilesystemAdapter):
+        replaced = False
+
+        def scan_directory(self, path: Path, expected_stat):
+            if path == child and not self.replaced:
+                self.replaced = True
+                ancestor.rename(moved)
+                ancestor.symlink_to(moved, target_is_directory=True)
+            return super().scan_directory(path, expected_stat)
+
+    run = scan_paths(
+        [tmp_path],
+        Policy.for_platform("windows"),
+        lambda _: None,
+        Event(),
+        adapter=AncestorReplacementAdapter(),
+    )
+
+    assert not any(file.path.name == "payload.bin" for file in run.files)
+    assert run.complete is False
+    assert run.errors
 
 
 def test_scanner_cancellation_marks_run_incomplete_and_reports_final_progress(tmp_path):

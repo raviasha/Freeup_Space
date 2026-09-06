@@ -37,23 +37,35 @@ class FilesystemAdapter:
             hasattr(os, "O_DIRECTORY")
             and hasattr(os, "O_NOFOLLOW")
             and os.scandir in os.supports_fd
+            and os.open in os.supports_dir_fd
         ):
-            flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
-            descriptor = os.open(path, flags)
+            descriptors, component_stats = _open_directory_chain(path)
             try:
-                directory_stat = os.fstat(descriptor)
+                directory_stat = component_stats[-1]
                 _require_same_directory(path, expected_stat, directory_stat)
-                entries, errors = self._read_entries(path, os.scandir(descriptor))
+                entries, errors = self._read_entries(
+                    path, os.scandir(descriptors[-1])
+                )
+                verification_descriptors, verification_stats = (
+                    _open_directory_chain(path)
+                )
+                try:
+                    _require_same_chain(path, component_stats, verification_stats)
+                finally:
+                    _close_descriptors(verification_descriptors)
             finally:
-                os.close(descriptor)
+                _close_descriptors(descriptors)
             return directory_stat, entries, errors
 
-        before = self.lstat(path)
-        _require_same_directory(path, expected_stat, before)
+        prefixes = _directory_prefixes(path)
+        before_chain = [self.lstat(prefix) for prefix in prefixes]
+        _require_valid_chain(path, before_chain)
+        _require_same_directory(path, expected_stat, before_chain[-1])
         entries, errors = self._read_entries(path, self.scandir(path))
-        after = self.lstat(path)
-        _require_same_directory(path, before, after)
-        return after, entries, errors
+        after_chain = [self.lstat(prefix) for prefix in prefixes]
+        _require_valid_chain(path, after_chain)
+        _require_same_chain(path, before_chain, after_chain)
+        return after_chain[-1], entries, errors
 
     def _read_entries(self, directory: Path, iterator):
         entries = []
@@ -79,6 +91,57 @@ def _require_same_directory(path: Path, expected_stat, actual_stat) -> None:
         or _is_link_or_reparse(actual_stat)
     ):
         raise OSError(errno.ESTALE, "directory changed during scan", str(path))
+
+
+def _directory_prefixes(path: Path) -> List[Path]:
+    absolute = Path(os.path.abspath(os.fspath(path)))
+    return list(reversed(absolute.parents)) + [absolute]
+
+
+def _open_directory_chain(path: Path):
+    descriptors = []
+    component_stats = []
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    try:
+        for prefix in _directory_prefixes(path):
+            if descriptors:
+                descriptor = os.open(prefix.name, flags, dir_fd=descriptors[-1])
+            else:
+                descriptor = os.open(prefix, flags)
+            descriptors.append(descriptor)
+            component_stats.append(os.fstat(descriptor))
+        _require_valid_chain(path, component_stats)
+    except BaseException:
+        _close_descriptors(descriptors)
+        raise
+    return descriptors, component_stats
+
+
+def _close_descriptors(descriptors) -> None:
+    for descriptor in reversed(descriptors):
+        os.close(descriptor)
+
+
+def _require_valid_chain(path: Path, component_stats) -> None:
+    if not component_stats or any(
+        not stat.S_ISDIR(component_stat.st_mode)
+        or _is_link_or_reparse(component_stat)
+        for component_stat in component_stats
+    ):
+        raise OSError(errno.ESTALE, "path contains a changed directory", str(path))
+
+
+def _require_same_chain(path: Path, expected_stats, actual_stats) -> None:
+    expected_identities = [
+        (int(component_stat.st_dev), int(component_stat.st_ino))
+        for component_stat in expected_stats
+    ]
+    actual_identities = [
+        (int(component_stat.st_dev), int(component_stat.st_ino))
+        for component_stat in actual_stats
+    ]
+    if expected_identities != actual_identities:
+        raise OSError(errno.ESTALE, "path changed during scan", str(path))
 
 
 def _is_link_or_reparse(stat_result) -> bool:
