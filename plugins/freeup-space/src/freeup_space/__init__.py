@@ -19,6 +19,7 @@ from .models import (
 )
 from .policy import CategoryRule, Policy
 from .permanent_delete import ApprovalError, permanently_delete
+from .cli import main
 from .plans import build_permanent_plan
 
 __version__ = "0.1.0"
@@ -43,5 +44,6 @@ __all__ = [
     "ScanRun",
     "Volume",
     "build_permanent_plan",
+    "main",
     "permanently_delete",
 ]

@@ -8,6 +8,9 @@ version = "0.1.0"
 description = "Utilities for safely reclaiming local disk space."
 requires-python = ">=3.9"
 
+[project.scripts]
+freeup-space = "freeup_space.cli:main"
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 
