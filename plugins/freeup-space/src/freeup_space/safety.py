@@ -203,12 +203,30 @@ def validate_target(
             return SafetyDecision(
                 False, "reject", "directory safe root is not recognized by policy"
             )
+        try:
+            safe_root_stat = snapshot.safe_root.lstat()
+        except FileNotFoundError:
+            return SafetyDecision(False, "reject", "directory safe root is missing")
+        except OSError as error:
+            return SafetyDecision(
+                False,
+                "reject",
+                "directory safe root cannot be inspected: {}".format(error),
+            )
+        if current.st_dev != safe_root_stat.st_dev:
+            return SafetyDecision(
+                False,
+                "reject",
+                "directory is on a different filesystem from its safe root",
+            )
         normalize = _normalizer(policy.platform)
         if normalize(str(path)) == normalize(str(snapshot.safe_root)):
             return SafetyDecision(
                 False, "reject", "a recognized safe root cannot itself be removed"
             )
-        unsafe_content = _unsafe_directory_content(path, policy, current.st_dev)
+        unsafe_content = _unsafe_directory_content(
+            path, policy, safe_root_stat.st_dev
+        )
         if unsafe_content is not None:
             return SafetyDecision(False, "reject", unsafe_content)
 

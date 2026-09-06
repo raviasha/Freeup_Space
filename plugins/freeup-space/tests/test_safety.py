@@ -1,6 +1,7 @@
 import os
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Optional
 
 from freeup_space.models import CandidateSnapshot
@@ -180,3 +181,31 @@ def test_clean_directory_below_recognized_safe_root_is_allowed(tmp_path):
 
     assert decision.actionable is True
     assert decision.outcome == "allow"
+
+
+def test_directory_on_different_device_from_safe_root_is_rejected(
+    tmp_path, monkeypatch
+):
+    safe_root = tmp_path / "safe"
+    target = safe_root / "candidate"
+    target.mkdir(parents=True)
+    policy = replace(Policy.for_platform("macos"), safe_roots=(str(safe_root),))
+    snapshot = snapshot_for(target, safe_root=safe_root)
+    real_lstat = Path.lstat
+
+    def lstat_with_mounted_candidate(path):
+        result = real_lstat(path)
+        if path == safe_root:
+            return SimpleNamespace(
+                st_dev=result.st_dev + 1,
+                st_mode=result.st_mode,
+            )
+        return result
+
+    monkeypatch.setattr(Path, "lstat", lstat_with_mounted_candidate)
+
+    decision = validate_target(target, policy, snapshot)
+
+    assert decision.actionable is False
+    assert decision.outcome == "reject"
+    assert "filesystem" in decision.reason.lower()
