@@ -6,8 +6,8 @@ Action: move to Trash
 
 Approved candidates must be selected by exact candidate ID:
 
-- `DUP-001` 120.0 MiB duplicate file at `/Users/me/Downloads/photo-copy.jpg`
-- `OLD-004` 84.0 MiB old file at `/Users/me/Documents/archive.zip`
+- `DUP-001` 120.0 MiB duplicate file at `<HOME>/Downloads/photo-copy.jpg`
+- `OLD-004` 84.0 MiB old file at `<HOME>/Documents/archive.zip`
 
 Recovery:
 

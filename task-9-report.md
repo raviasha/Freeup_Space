@@ -14,6 +14,7 @@ What changed:
 Verification:
 
 - `pytest tests/test_skill_files.py -q`
+- `sh -c 'if rg -n "/Users/me/|/Users/" examples/sample-report.md; then exit 1; fi; pytest tests/test_skill_files.py -q'`
 - `python3 /Users/rampetaravishankar/.codex/skills/.system/skill-creator/scripts/quick_validate.py skills/freeing-up-space`
 - `python3 /Users/rampetaravishankar/.codex/skills/.system/skill-creator/scripts/quick_validate.py skills/finding-duplicates`
 - `python3 /Users/rampetaravishankar/.codex/skills/.system/skill-creator/scripts/quick_validate.py skills/finding-old-files`
