@@ -1,0 +1,6 @@
+.worktrees/
+.superpowers/
+plugins/freeup-space/.freeup-space/
+plugins/freeup-space/.pytest_cache/
+plugins/freeup-space/__pycache__/
+plugins/freeup-space/src/**/*.pyc
