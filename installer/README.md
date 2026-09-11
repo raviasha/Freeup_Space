@@ -38,3 +38,5 @@ or stored in this repository.
 The release workflow uploads tested installers as build artifacts for branch pushes. A `v*` tag
 publishes a GitHub release only after all platform package checks pass. Checksums accompany each
 installer. Release notes explicitly describe signing status.
+
+Third-party runtime license notices are included in the payload under `licenses/`.

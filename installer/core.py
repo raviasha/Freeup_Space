@@ -7,12 +7,15 @@ from __future__ import annotations
 
 import contextlib
 import ctypes
+import errno
+import hashlib
 import json
 import os
 import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import uuid
 from pathlib import Path
 from urllib.parse import urlparse
@@ -186,7 +189,44 @@ def _owned_repository(source):
             and not parsed.query and not parsed.fragment and path == '/raviasha/freeup_space')
 
 
+@contextlib.contextmanager
+def _destination_lock(destination):
+    user_key = hashlib.sha256(str(Path.home()).encode('utf-8')).hexdigest()[:16]
+    destination_key = hashlib.sha256(os.path.normcase(str(destination.resolve())).encode('utf-8')).hexdigest()
+    directory = Path(tempfile.gettempdir()) / ('freeup-space-setup-' + user_key)
+    try:
+        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        handle = (directory / (destination_key + '.lock')).open('a+b')
+    except OSError as error:
+        raise SetupError(f'Cannot prepare the setup lock: {error}') from error
+    # Keep the lock file: unlinking it allows waiters to lock different inodes.
+    # Closing this handle (including on process death) releases the OS lock.
+    with handle:
+        try:
+            if os.name == 'nt':
+                import msvcrt
+                if handle.seek(0, os.SEEK_END) == 0:
+                    handle.write(b'\0')
+                    handle.flush()
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as error:
+            if error.errno in (errno.EACCES, errno.EAGAIN, errno.EDEADLK):
+                raise SetupError('Cannot continue because another setup is running for this folder. Wait for it to finish and retry.') from error
+            raise SetupError(f'Cannot acquire the setup lock: {error}') from error
+        yield
+
+
 def install(payload: Path, destination: Path, codex: Path, progress=lambda message: None) -> dict:
+    """Serialize all state reads, installation and rollback for one destination."""
+    with _destination_lock(Path(destination)):
+        return _install_unlocked(payload, destination, codex, progress)
+
+
+def _install_unlocked(payload: Path, destination: Path, codex: Path, progress) -> dict:
     """Install/repair from an expanded setup payload; raise actionable SetupError."""
     payload, destination, codex = Path(payload).resolve(), Path(destination).resolve(), Path(codex).resolve()
     if not codex.is_file():
@@ -212,6 +252,8 @@ def install(payload: Path, destination: Path, codex: Path, progress=lambda messa
             old = _read_json(catalog)
             if old.get('name') != 'freeup-space' or any(p.get('name') != 'freeup-space' for p in old.get('plugins', [])):
                 raise SetupError('The setup marketplace contains unrelated entries and will not be overwritten.')
+    elif destination.exists() and (not destination.is_dir() or any(destination.iterdir())):
+        raise SetupError(f'The destination contains files not owned by Freeup Space setup: {destination}. Choose an empty folder.')
     manifest = _read_json(payload / 'plugin/.codex-plugin/plugin.json')
     version = manifest.get('version')
     if manifest.get('name') != 'freeup-space' or not isinstance(version, str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9.+_-]{0,120}', version):
@@ -220,13 +262,16 @@ def install(payload: Path, destination: Path, codex: Path, progress=lambda messa
     if not (payload / 'runtime' / executable).is_file():
         raise SetupError('The setup payload is missing its bundled runtime. Download the setup for this operating system again.')
     previous_catalog = catalog.read_bytes() if catalog.exists() else None
-    previous_marker = marker.read_bytes() if marker.exists() else None
     previous_dedicated = next((p for p in previous_plugins if p.get('pluginId') == PLUGIN_ID and p.get('installed')), None)
     changed_catalog = False
     attempted_registration = False
     attempted_install = False
     try:
         progress('Copying the self-contained runtime…')
+        # Retained versions remain installer-owned even if diagnostics or host
+        # registration fail, so a subsequent Repair can safely use this folder.
+        if not marker.exists():
+            _atomic_write(marker, _encode({'owner': OWNER}))
         unique = uuid.uuid4().hex
         version_id = version + '-' + unique
         # Codex caches plugin files by manifest version. Each Repair must copy
@@ -249,7 +294,6 @@ def install(payload: Path, destination: Path, codex: Path, progress=lambda messa
                        'plugins': [{'name': 'freeup-space', 'source': {'source': 'local', 'path': f'./versions/{version_id}/plugin'},
                                     'policy': {'installation': 'AVAILABLE', 'authentication': 'ON_INSTALL'}, 'category': 'Utilities'}]}
         changed_catalog = True
-        _atomic_write(marker, _encode({'owner': OWNER}))
         _atomic_write(catalog, _encode(marketplace))
         progress('Registering Freeup Space with Codex…')
         attempted_registration = True
@@ -272,25 +316,28 @@ def install(payload: Path, destination: Path, codex: Path, progress=lambda messa
     except Exception as error:
         rollback_errors = []
         if changed_catalog:
-            for path, previous in ((catalog, previous_catalog), (marker, previous_marker)):
-                try:
-                    _atomic_write(path, previous) if previous is not None else path.unlink(missing_ok=True)
-                except OSError as rollback_error:
-                    rollback_errors.append(str(rollback_error))
-            # Restore host state after restoring the source catalog. Never touch personal catalogs.
             try:
-                if attempted_install and not previous_dedicated:
-                    _json_command([codex, 'plugin', 'remove', PLUGIN_ID, '--json'])
-                if attempted_registration and existing_market and previous_catalog is not None:
-                    _json_command([codex, 'plugin', 'marketplace', 'add', destination, '--json'])
-                    if attempted_install and previous_dedicated:
-                        _json_command([codex, 'plugin', 'add', PLUGIN_ID, '--json'])
-                elif attempted_registration and not existing_market:
-                    _json_command([codex, 'plugin', 'marketplace', 'remove', 'freeup-space', '--json'])
-            except SetupError as rollback_error:
+                _atomic_write(catalog, previous_catalog) if previous_catalog is not None else catalog.unlink(missing_ok=True)
+            except OSError as rollback_error:
                 rollback_errors.append(str(rollback_error))
+            # Restore host state after restoring the source catalog. Never touch personal catalogs.
+            rollback_commands = []
+            if attempted_install and not previous_dedicated:
+                rollback_commands.append([codex, 'plugin', 'remove', PLUGIN_ID, '--json'])
+            if attempted_registration and existing_market and previous_catalog is not None:
+                rollback_commands.append([codex, 'plugin', 'marketplace', 'add', destination, '--json'])
+                if attempted_install and previous_dedicated:
+                    rollback_commands.append([codex, 'plugin', 'add', PLUGIN_ID, '--json'])
+            elif attempted_registration and not existing_market:
+                rollback_commands.append([codex, 'plugin', 'marketplace', 'remove', 'freeup-space', '--json'])
+            for command in rollback_commands:
+                try:
+                    _json_command(command)
+                except SetupError as rollback_error:
+                    rollback_errors.append(str(rollback_error))
         suffix = (' Rollback needs attention: ' + '; '.join(rollback_errors)) if rollback_errors else ''
         raise SetupError(str(error) + suffix) from error
+    warnings = []
     for entry in previous_plugins:
         old_id = entry.get('pluginId')
         if old_id != PLUGIN_ID and isinstance(old_id, str) and entry.get('name') == 'freeup-space' and entry.get('installed') is True and _owned_repository(entry.get('marketplaceSource')):
@@ -298,7 +345,9 @@ def install(payload: Path, destination: Path, codex: Path, progress=lambda messa
                 progress(f'Removing the previous Freeup Space registration ({old_id})…')
                 _json_command([codex, 'plugin', 'remove', old_id, '--json'])
             except SetupError as error:
-                progress(f'Freeup Space is ready. The older registration could not be removed: {error}')
+                warning = f'The older registration {old_id} could not be removed and may remain active: {error}'
+                warnings.append(warning)
+                progress(warning)
     progress('Ready. Open a new Codex task and ask to open Freeup Space.')
-    return {'version': version, 'installed_version': installed_version,
+    return {'version': version, 'installed_version': installed_version, 'warnings': warnings,
             'plugin_root': plugin_root, 'marketplace_path': catalog}

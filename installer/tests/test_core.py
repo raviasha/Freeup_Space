@@ -1,5 +1,6 @@
 import json
 import subprocess
+import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -17,6 +18,7 @@ class Host:
         self.fail = None
         self.disabled = False
         self.bad_resource = False
+        self.fail_commands = {}
 
     def run(self, args, **kwargs):
         args = [str(a) for a in args]
@@ -27,6 +29,8 @@ class Host:
             raise subprocess.CalledProcessError(1, args, stderr='synthetic failure')
         tail = args[1:]
         data = {}
+        if tuple(tail) in self.fail_commands:
+            raise subprocess.CalledProcessError(1, args, stderr=self.fail_commands[tuple(tail)])
         if tail[:2] in (['plugin', 'install'], ['plugin', 'uninstall']):
             raise subprocess.CalledProcessError(1, args, stderr='unknown plugin subcommand')
         if tail == ['--version']:
@@ -39,6 +43,8 @@ class Host:
             data = {'installed': self.installed}
         elif tail[:3] == ['plugin', 'marketplace', 'add']:
             self.marketplaces = [{'name': 'freeup-space', 'root': str(self.destination)}]
+        elif tail[:3] == ['plugin', 'marketplace', 'remove']:
+            self.marketplaces = [m for m in self.marketplaces if m['name'] != tail[3]]
         elif tail[:2] == ['plugin', 'add']:
             catalog = json.loads((self.destination / '.agents/plugins/marketplace.json').read_text(encoding='utf-8'))
             plugin = (self.destination / catalog['plugins'][0]['source']['path']).resolve()
@@ -68,6 +74,7 @@ class Host:
 
 @pytest.fixture
 def fixture(tmp_path, monkeypatch):
+    monkeypatch.setattr(tempfile, 'gettempdir', lambda: str(tmp_path))
     payload = tmp_path / 'payload'
     manifest = payload / 'plugin/.codex-plugin/plugin.json'
     manifest.parent.mkdir(parents=True)
@@ -287,3 +294,77 @@ def test_repair_busts_codex_cache_while_doctor_keeps_payload_version(fixture):
     assert first['version'] == second['version'] == '1.2.3'
     assert host.installed[-1]['version'] == second['installed_version']
     assert json.loads((payload / 'plugin/.codex-plugin/plugin.json').read_text(encoding='utf-8'))['version'] == '1.2.3'
+
+
+def test_failed_plugin_rollback_does_not_skip_marketplace_rollback(fixture):
+    payload, destination, codex, host = fixture
+    host.fail_commands = {
+        ('plugin', 'add', core.PLUGIN_ID, '--json'): 'plugin add failed',
+        ('plugin', 'remove', core.PLUGIN_ID, '--json'): 'plugin not installed',
+    }
+    with pytest.raises(core.SetupError, match='plugin not installed'):
+        core.install(payload, destination, codex)
+    assert host.marketplaces == []
+    assert any(call[1:] == ['plugin', 'marketplace', 'remove', 'freeup-space', '--json'] for call in host.calls)
+    assert not (destination / '.agents/plugins/marketplace.json').exists()
+
+
+def test_failed_migration_is_returned_as_warning_and_keeps_new_install(fixture):
+    payload, destination, codex, host = fixture
+    old_id = 'freeup-space@personal'
+    host.installed = [{'pluginId': old_id, 'name': 'freeup-space', 'installed': True,
+                       'marketplaceSource': {'sourceType': 'git', 'source': 'https://github.com/raviasha/Freeup_Space.git'}}]
+    host.fail_commands = {('plugin', 'remove', old_id, '--json'): 'old plugin removal failed'}
+    result = core.install(payload, destination, codex)
+    assert len(result['warnings']) == 1
+    assert old_id in result['warnings'][0]
+    assert 'old plugin removal failed' in result['warnings'][0]
+    assert {p['pluginId'] for p in host.installed} == {old_id, core.PLUGIN_ID}
+    assert Path(result['plugin_root']).is_dir()
+
+
+def test_same_destination_cannot_run_two_setups(fixture):
+    payload, destination, codex, host = fixture
+    rejected = []
+    def progress(message):
+        if not rejected:
+            calls_before = len(host.calls)
+            with pytest.raises(core.SetupError, match='another setup is running'):
+                core.install(payload, destination, codex)
+            assert len(host.calls) == calls_before
+            rejected.append(True)
+    core.install(payload, destination, codex, progress)
+    assert rejected == [True]
+
+
+def test_failed_setup_releases_destination_lock(fixture):
+    payload, destination, codex, host = fixture
+    host.fail = '--help'
+    with pytest.raises(core.SetupError):
+        core.install(payload, destination, codex)
+    host.fail = None
+    result = core.install(payload, destination, codex)
+    assert result['version'] == '1.2.3'
+
+
+def test_nonempty_unowned_destination_is_not_adopted(fixture):
+    payload, destination, codex, host = fixture
+    destination.mkdir()
+    unrelated = destination / 'keep.txt'
+    unrelated.write_text('unrelated document', encoding='utf-8')
+    with pytest.raises(core.SetupError, match='empty folder'):
+        core.install(payload, destination, codex)
+    assert list(destination.iterdir()) == [unrelated]
+    assert unrelated.read_text(encoding='utf-8') == 'unrelated document'
+    assert not any('add' in call and '--help' not in call for call in host.calls)
+
+
+def test_failed_staging_keeps_ownership_for_repair(fixture):
+    payload, destination, codex, host = fixture
+    host.fail = '--doctor'
+    with pytest.raises(core.SetupError):
+        core.install(payload, destination, codex)
+    assert (destination / core.MARKER).exists()
+    host.fail = None
+    result = core.install(payload, destination, codex)
+    assert result['version'] == '1.2.3'

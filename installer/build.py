@@ -58,6 +58,7 @@ def build(output: Path, runtime_only=False) -> Path:
     if payload.exists():
         shutil.rmtree(payload)  # This function owns only the build output's payload directory.
     stage_payload(PLUGIN, runtime, payload)
+    shutil.copytree(ROOT / 'installer/licenses', payload / 'licenses')
     archive = output / 'payload.tar.gz'
     pack_payload(payload, archive)
     kind = ['--onefile'] if os.name == 'nt' else ['--onedir', '--osx-bundle-identifier', 'com.raviasha.freeupspace.setup']

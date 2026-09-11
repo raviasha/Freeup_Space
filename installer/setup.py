@@ -64,7 +64,7 @@ def show_setup(archive):
     bar = ttk.Progressbar(frame, mode='indeterminate')
     bar.pack(fill='x', pady=(0, 16))
     events = queue.Queue()
-    context = {'busy': True, 'codex': None, 'result': None, 'log': []}
+    context = {'busy': True, 'codex': None, 'result': None, 'log': [], 'destination': default_install_root()}
     actions = ttk.Frame(frame)
     actions.pack(fill='x')
 
@@ -78,7 +78,7 @@ def show_setup(archive):
                 events.put(('progress', 'Preparing the included runtime…'))
                 payload = Path(directory)
                 extract_payload(archive, payload)
-                result = install(payload, default_install_root(), Path(context['codex']),
+                result = install(payload, context['destination'], Path(context['codex']),
                                  progress=lambda message: events.put(('progress', message)))
                 events.put(('ready', result))
         except Exception as error:
@@ -122,8 +122,19 @@ def show_setup(archive):
         dialog.title('Setup details')
         text = tk.Text(dialog, width=90, height=22, wrap='word')
         text.pack(fill='both', expand=True)
-        text.insert('1.0', '\n\n'.join(context['log']) or 'No setup actions yet.')
+        text.insert('1.0', 'Setup folder: '+str(context['destination'])+'\n\n'+('\n\n'.join(context['log']) or 'No setup actions yet.'))
         text.configure(state='disabled')
+
+        def choose_folder():
+            selected = filedialog.askdirectory(parent=dialog, title='Choose an empty folder dedicated to Freeup Space',
+                                               initialdir=str(context['destination'].parent))
+            if selected:
+                context['destination'] = Path(selected)
+                log_message('Setup folder selected. Click Install / Update / Repair to retry.')
+                dialog.destroy()
+
+        ttk.Button(dialog, text='Choose setup folder…', command=choose_folder,
+                   state='disabled' if context['busy'] else 'normal').pack(padx=12, pady=12, anchor='w')
 
     ttk.Button(frame, text='Setup details', command=show_log).pack(anchor='w')
 
@@ -149,10 +160,14 @@ def show_setup(archive):
                                 'Codex was not found. Install and open the Codex desktop app, then reopen setup. If it is already installed, use Choose Codex.')
                 elif kind == 'ready':
                     context['result'] = value
-                    log_message('Ready! Open a new Codex task and ask “Open Freeup Space”. Your files have not been cleaned or deleted.')
+                    warnings = value.get('warnings', [])
+                    if warnings:
+                        log_message('Installed, with something to check: '+' '.join(warnings)+' See Setup details.')
+                    else:
+                        log_message('Ready! Open a new Codex task and ask “Open Freeup Space”.')
                     open_button.configure(state='normal')
                 else:
-                    log_message('Setup needs attention: '+str(value))
+                    log_message('Setup needs attention: '+str(value)+' See Setup details for recovery options.')
                 install_button.configure(state='normal' if context['codex'] else 'disabled')
         except queue.Empty:
             pass
