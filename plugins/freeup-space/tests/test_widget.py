@@ -176,7 +176,7 @@ def test_stdio_handshake_resources_and_controls(tmp_path):
                 dict(jsonrpc="2.0", id=3, method="resources/read", params={"uri": URI}),
                 dict(jsonrpc="2.0", id=4, method="tools/call", params={"name": "open_widget", "arguments": {"workspace": str(tmp_path)}})]
     result = subprocess.run([sys.executable, str(ROOT / "scripts/freeup_widget.py")],
-                            input="\n".join(json.dumps(m) for m in messages)+"\n", text=True, capture_output=True)
+                            input="\n".join(json.dumps(m) for m in messages)+"\n", text=True, encoding="utf-8", capture_output=True)
     assert result.returncode == 0, result.stderr
     responses = [json.loads(line)["result"] for line in result.stdout.splitlines()]
     assert responses[0]["capabilities"] == {"tools": {}, "resources": {}}
@@ -193,7 +193,7 @@ def test_registered_launcher_works_from_an_unrelated_workspace(tmp_path):
     """Catch an unresolved plugin-root variable or dependency on task cwd."""
     config = json.loads((ROOT / ".mcp.json").read_text())["mcpServers"]["freeup-space"]
     launcher = Path(config["args"][0])
-    if launcher.is_absolute() and not launcher.exists():
+    if not launcher.exists():
         pytest.skip("Personal MCP launcher is not installed on this machine")
     messages = [
         {"jsonrpc": "2.0", "id": 1, "method": "initialize",
@@ -203,8 +203,26 @@ def test_registered_launcher_works_from_an_unrelated_workspace(tmp_path):
     result = subprocess.run([config["command"], *config.get("args", [])],
                             cwd=tmp_path, env={**os.environ, **config.get("env", {})},
                             input="\n".join(json.dumps(m) for m in messages) + "\n",
-                            text=True, capture_output=True, timeout=20)
+                            text=True, encoding="utf-8", capture_output=True, timeout=20)
     assert result.returncode == 0, result.stderr
     responses = [json.loads(line) for line in result.stdout.splitlines()]
     assert any(t["name"] == "open_widget" for t in responses[1]["result"]["tools"])
     assert not list(tmp_path.iterdir()), "Startup must not create a cleanup run"
+
+
+def test_stdio_uses_utf8_even_with_legacy_console_encoding(tmp_path):
+    workspace = tmp_path / "資料-é"
+    workspace.mkdir()
+    messages = [
+        {"jsonrpc": "2.0", "id": 1, "method": "resources/read", "params": {"uri": URI}},
+        {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
+            "name": "open_widget", "arguments": {"workspace": str(workspace)}}},
+    ]
+    result = subprocess.run([sys.executable, str(ROOT / "scripts/freeup_widget.py")],
+                            input="\n".join(json.dumps(m, ensure_ascii=False) for m in messages)+"\n",
+                            text=True, encoding="utf-8", capture_output=True,
+                            env={**os.environ, "PYTHONIOENCODING": "cp1252"}, timeout=20)
+    assert result.returncode == 0, result.stderr
+    responses = [json.loads(line)["result"] for line in result.stdout.splitlines()]
+    assert "◫" in responses[0]["contents"][0]["text"]
+    assert responses[1]["_meta"]["widget"]["status"] == "choose-mode"

@@ -163,6 +163,9 @@ class Server:
 
 
 def main():
+    # MCP uses UTF-8 regardless of the Windows console code page.
+    sys.stdin.reconfigure(encoding="utf-8")
+    sys.stdout.reconfigure(encoding="utf-8")
     server = Server()
     try:
         for line in sys.stdin:
