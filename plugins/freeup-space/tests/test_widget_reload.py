@@ -79,3 +79,34 @@ def test_expired_session_cannot_show_stale_start_controls():
     finally:
         process.terminate()
         process.communicate(timeout=10)
+
+def test_visibility_reconnect_blocks_controls_until_live_status():
+    playwright_api = pytest.importorskip("playwright.sync_api")
+    root = Path(__file__).resolve().parents[1]
+    process = subprocess.Popen([sys.executable, '-u', str(root / 'tests/widget_harness.py')],
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        url = process.stdout.readline().strip()
+        with playwright_api.sync_playwright() as playwright:
+            browser = playwright.chromium.launch(channel=os.environ.get("FREEUP_TEST_BROWSER_CHANNEL"))
+            page = browser.new_page()
+            page.goto(url)
+            widget = page.frame_locator('#widget')
+            playwright_api.expect(widget.get_by_role('button', name='Start scan', exact=True)).to_be_visible()
+            held = []
+            def delay_status(route):
+                if route.request.post_data_json.get('name') == 'scan_status':
+                    held.append(route)
+                else:
+                    route.continue_()
+            page.route('**/api', delay_status)
+            with page.expect_request(lambda request: request.url.endswith('/api') and request.post_data_json.get('name') == 'scan_status'):
+                widget.locator('body').evaluate("() => document.dispatchEvent(new Event('visibilitychange'))")
+            playwright_api.expect(widget.get_by_role('button', name='Start scan', exact=True)).to_have_count(0)
+            assert held
+            held.pop().continue_()
+            playwright_api.expect(widget.get_by_role('button', name='Start scan', exact=True)).to_be_visible()
+            browser.close()
+    finally:
+        process.terminate()
+        process.communicate(timeout=10)

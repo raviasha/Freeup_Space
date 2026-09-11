@@ -32,7 +32,7 @@ function restore(result){const view=extract(result);if(!view)return;
 if(!state||state.session_id!==view.session_id){state=view;selected.clear();category="";offset=0;query="";needsReconnect=true}
 void reconnect();}
 async function reconnect(){if(!state||restoring||!(bridgeReady||window.openai?.callTool))return;
-restoring=true;clearTimeout(timer);render();
+restoring=true;needsReconnect=true;clearTimeout(timer);render();
 try{await refresh();needsReconnect=false;error("")}
 catch(e){needsReconnect=true;clearTimeout(timer);error(e.message||String(e))}
 finally{restoring=false;render()}}
