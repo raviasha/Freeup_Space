@@ -9,7 +9,9 @@ from pathlib import Path
 import pytest
 
 from freeup_space import cli
+from freeup_space import deep
 from freeup_space.investigation import validate_notes
+from freeup_space.models import FileRecord
 from freeup_space.plans import PlanError, select_ids
 from freeup_space.policy import Policy
 from freeup_space.revalidate import revalidate
@@ -44,6 +46,22 @@ def start(root, mode, capsys, run_id="test-run"):
     return json.loads(capsys.readouterr().out)
 
 
+def _record_for(path: Path) -> FileRecord:
+    value = path.stat()
+    return FileRecord(
+        path=path,
+        size=value.st_size,
+        allocated_size=getattr(value, "st_blocks", 0) * 512,
+        mtime=value.st_mtime,
+        atime=value.st_atime,
+        ctime=value.st_ctime,
+        st_dev=value.st_dev,
+        st_ino=value.st_ino,
+        volume_id=str(value.st_dev),
+        file_id="{}:{}".format(value.st_dev, value.st_ino),
+    )
+
+
 def test_no_mode_shows_all_choices_without_scanning(monkeypatch, capsys, tmp_path):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(cli, "cmd_quick", lambda _: pytest.fail("unexpected scan"))
@@ -72,6 +90,36 @@ def test_deep_persists_real_duplicates_old_files_and_managed_findings(fixture_tr
     assert not any("content" in key for key in output["candidates"][0])
     assert "- [ ]" in Path(output["report_path"]).read_text()
     assert (fixture_tree / "b.txt").exists()
+
+
+def test_duplicate_selection_has_hard_file_and_byte_budgets(tmp_path, monkeypatch):
+    paths = []
+    for name in ("a.bin", "b.bin", "c.bin"):
+        path = tmp_path / name
+        path.write_bytes(b"data")
+        paths.append(path)
+    monkeypatch.setattr(deep, "_DUPLICATE_MAX_FILES", 2)
+    monkeypatch.setattr(deep, "_DUPLICATE_MAX_BYTES", 8)
+
+    selected, coverage = deep._select_duplicate_records(
+        tuple(_record_for(path) for path in paths)
+    )
+
+    assert tuple(record.path.name for record in selected) == ("a.bin", "b.bin")
+    assert coverage["duplicate_selected_files"] == 2
+    assert coverage["duplicate_selected_bytes"] == 8
+    assert coverage["duplicate_selection_limited"] is True
+
+
+def test_duplicate_timeout_finalizes_a_safe_nonduplicate_result(fixture_tree):
+    run = deep.inventory((fixture_tree,), PLATFORM, "timeout-run", "deep")
+
+    result = deep.analyze(run, max_seconds=0)
+
+    assert result.complete
+    assert result.duplicate_groups == ()
+    assert result.coverage["duplicates"] == "incomplete"
+    assert result.coverage["analysis"] == "duplicate-time-budget-exhausted"
 
 
 def test_saved_report_is_repeatable_and_does_not_rescan(fixture_tree, capsys, monkeypatch):

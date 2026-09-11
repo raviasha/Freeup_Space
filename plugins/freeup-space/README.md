@@ -1,7 +1,13 @@
 # Freeup Space
 
 A Codex plugin for reviewing disk cleanup opportunities on **macOS and Windows**.
-Choose a mode for every new run; approve exact candidate IDs before cleanup.
+Choose a mode, expand categories, check individual items, preview, and confirm
+recoverable cleanup inside the interactive widget. The plugin records the exact
+candidate IDs behind your selection; you do not need to type them.
+
+The widget includes live scan progress, search, paginated category contents,
+selection totals, AI findings and cleanup receipts. It supports Trash / Recycle
+Bin only. See [the widget guide](docs/interactive-widget.md).
 
 | Mode | What it does | AI usage |
 | --- | --- | --- |
@@ -43,10 +49,10 @@ Ask:
 
 > Help me free up disk space.
 
-Codex offers Quick Scan, Deep Scan, and Deep Scan + AI. If your prompt already names a mode,
-it uses that choice directly:
+Codex opens the widget with Quick Scan, Deep Scan, and Deep Scan + AI. Select the
+mode and folders there, then use category and item checkboxes to review cleanup:
 
-> Run Deep Scan on my Downloads and external drive, then show the categorized checklist.
+> Open the Freeup Space widget.
 
 Quick and Deep leave classification to the local executable. The AI mode additionally
 investigates unresolved findings and presents its suggestions separately.
@@ -124,6 +130,15 @@ The [AI workflow](skills/freeing-up-space/references/ai-investigation.md) define
 
 ## Coverage and limits
 
+Deep publishes an inventory-complete checkpoint before duplicate hashing, so early
+cache, temporary, log, download, developer-artifact and old-file candidates can be
+reviewed while exact duplicates are still being confirmed. Duplicate hashing uses a
+Pareto-prioritized folder pass: it targets roughly 80% of eligible bytes from roughly
+the top 20% of folders first, subject to 10,000 files, 1 GiB and 120-second content-analysis
+budgets. If the time budget expires, Deep produces a reviewable plan without duplicate
+candidates and labels duplicate coverage incomplete in `run.json`; it never leaves the run
+pending. This is not a guarantee that every duplicate was compared.
+
 Deep detects exact regular-file duplicates using local SHA-256, older files, known
 cache/log/download locations, installers, archives, developer-artifact paths, and personal
 file types. Ownership hints report cloud stores, backups, containers, virtual disks,
@@ -148,6 +163,10 @@ Use the bundled runner with these arguments, replacing IDs with those the user a
 apply --run-id <id> --platform <macos|windows> --dry-run <candidate-id...>
 apply --run-id <id> --platform <macos|windows> <candidate-id...>
 ```
+
+The report presents each actionable candidate as an unchecked Markdown checkbox containing
+one exact candidate ID. Check or name only the IDs you approve. Inventory-stage checkboxes
+are provisional and cannot be applied until final analysis completes.
 
 Approval must name exact candidate IDs. Targets and duplicate retained copies are checked
 again; changed plans require a new review. AI suggestions are never accepted as IDs.

@@ -5,6 +5,12 @@ description: Move explicitly approved freeup-space candidates to Trash or the Re
 
 # Trashing Approved Files
 
+In the interactive freeup-space widget, the user selects exact candidate IDs,
+reviews a dry-run preview, and clicks confirmation to move those items to Trash
+or Recycle Bin. Let the widget complete that flow. Do not ask for a typed ID list
+or run a second cleanup after its receipt. Never automate the user's confirmation
+button. The CLI procedure below is for users who request a CLI fallback.
+
 Use this skill when the user has already approved moving specific candidates to Trash or the Recycle Bin.
 
 Before mutating anything:

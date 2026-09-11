@@ -7,6 +7,15 @@ description: Review freeup-space cleanup plans, explain risks, and ask for narro
 
 Use this skill when you need to explain a `freeup-space` plan before any cleanup happens.
 
+Use the interactive widget by default. Expandable categories show their counts and
+sizes; each contains the specific items and their clickable checkboxes. The user
+selects items, previews the exact candidate IDs and confirms Trash / Recycle Bin
+inside the widget. Never ask them to type IDs when the widget is available, and
+never automate a real user's approval controls. A checked box is selection;
+the final confirmation authorizes the exact previewed move.
+
+The following text-based approval rules apply only to a requested CLI fallback.
+
 Focus the review on:
 
 - candidate ID

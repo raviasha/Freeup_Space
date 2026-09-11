@@ -8,9 +8,10 @@ from dataclasses import replace
 from pathlib import Path
 from threading import Event
 from time import monotonic
+from collections import defaultdict
 
 from .categories import classify
-from .duplicates import find_duplicates, sha256_hasher
+from .duplicates import DuplicateAnalysisDeadlineExceeded, find_duplicates, sha256_hasher
 from .policy import Policy
 from .safety import is_protected
 from .scanner import scan_paths
@@ -23,6 +24,13 @@ MODES = [
     {"id": "deep", "name": MODE_NAMES["deep"], "description": "Broader inventory, exact duplicates and older files using fixed rules; minimal AI."},
     {"id": "deep-ai", "name": MODE_NAMES["deep-ai"], "description": "The same Deep Scan plus optional AI investigation of unclear findings; more time and AI."},
 ]
+
+# Deep analysis is deliberately bounded. The inventory and its fixed-rule findings
+# are still complete, but duplicate confirmation must never turn into an
+# unbounded content-read of a large volume.
+_DUPLICATE_MAX_FILES = 10_000
+_DUPLICATE_MAX_BYTES = 1024 * 1024 * 1024
+_DUPLICATE_MAX_SECONDS = 120.0
 
 
 def default_roots(platform):
@@ -89,7 +97,60 @@ def inventory(paths, platform, run_id, mode, progress_stream=None):
     return replace(run, run_id=run_id, mode=mode, complete=False, coverage=coverage)
 
 
-def analyze(run, progress_stream=None):
+def _select_duplicate_records(eligible):
+    """Select a deterministic, bounded Pareto-prioritized duplicate scope."""
+
+    folder_records = defaultdict(list)
+    for record in eligible:
+        folder_records[record.path.parent].append(record)
+    folders = sorted(
+        folder_records.items(),
+        key=lambda item: (-sum(record.size for record in item[1]), str(item[0])),
+    )
+    total_bytes = sum(record.size for record in eligible)
+    target_bytes = int(total_bytes * 0.80)
+    target_folders = max(1, int(len(folders) * 0.20)) if folders else 0
+    selected = []
+    selected_bytes = 0
+    skipped_for_byte_budget = 0
+
+    for index, (_, records) in enumerate(folders):
+        if index >= target_folders and selected_bytes >= target_bytes:
+            break
+        for record in sorted(records, key=lambda item: (-item.size, str(item.path))):
+            if len(selected) >= _DUPLICATE_MAX_FILES:
+                break
+            if selected_bytes + record.size > _DUPLICATE_MAX_BYTES:
+                skipped_for_byte_budget += 1
+                continue
+            selected.append(record)
+            selected_bytes += record.size
+        if len(selected) >= _DUPLICATE_MAX_FILES:
+            break
+
+    budget_exhausted = (
+        len(selected) >= _DUPLICATE_MAX_FILES
+        or selected_bytes >= _DUPLICATE_MAX_BYTES
+        or skipped_for_byte_budget > 0
+    )
+    return tuple(selected), {
+        "duplicate_eligible_files": len(eligible),
+        "duplicate_eligible_bytes": total_bytes,
+        "duplicate_folder_count": len(folders),
+        "duplicate_target_folder_count": target_folders,
+        "duplicate_target_bytes": target_bytes,
+        "duplicate_selected_files": len(selected),
+        "duplicate_selected_bytes": selected_bytes,
+        "duplicate_selected_folder_count": len({record.path.parent for record in selected}),
+        "duplicate_file_budget": _DUPLICATE_MAX_FILES,
+        "duplicate_byte_budget": _DUPLICATE_MAX_BYTES,
+        "duplicate_time_budget_seconds": _DUPLICATE_MAX_SECONDS,
+        "duplicate_selection_limited": budget_exhausted,
+        "duplicate_scope": "Pareto-prioritized folders; bounded content analysis",
+    }
+
+
+def analyze(run, progress_stream=None, *, max_seconds=_DUPLICATE_MAX_SECONDS):
     progress_stream = progress_stream or sys.stderr
     policy = Policy.for_platform(run.platform)
     eligible = []
@@ -101,17 +162,55 @@ def analyze(run, progress_stream=None):
             item.actionable or item.rule == "unclassified" for item in findings
         ):
             eligible.append(record)
+    selected, selection_coverage = _select_duplicate_records(eligible)
     last_progress = [0.0]
+    progress_count = [0]
+    deadline = monotonic() + max_seconds
 
     def progress(_):
+        progress_count[0] += 1
         if monotonic() - last_progress[0] >= 5:
-            print("Analysis: confirming exact duplicates locally", file=progress_stream)
+            print(
+                "Analysis: checked {} duplicate candidates ({} selected; {:.0f}s budget)".format(
+                    progress_count[0], len(selected), max_seconds
+                ),
+                file=progress_stream,
+                flush=True,
+            )
             last_progress[0] = monotonic()
 
-    groups = tuple(find_duplicates(eligible, sha256_hasher, progress=progress))
-    coverage = dict(run.coverage, duplicates="complete", duplicate_groups=len(groups),
-                    duplicate_eligible_files=len(eligible),
-                    analysis="complete", old_file_months=12)
+    try:
+        groups = tuple(
+            find_duplicates(
+                selected,
+                sha256_hasher,
+                progress=progress,
+                should_continue=lambda: monotonic() < deadline,
+            )
+        )
+    except DuplicateAnalysisDeadlineExceeded:
+        coverage = dict(
+            run.coverage,
+            **selection_coverage,
+            duplicates="incomplete",
+            duplicate_groups=0,
+            duplicate_hashed_files=0,
+            duplicate_hashed_bytes=0,
+            analysis="duplicate-time-budget-exhausted",
+            old_file_months=12,
+        )
+        return replace(run, complete=True, duplicate_groups=(), coverage=coverage)
+
+    coverage = dict(
+        run.coverage,
+        **selection_coverage,
+        duplicates="complete",
+        duplicate_groups=len(groups),
+        duplicate_hashed_files=len(selected),
+        duplicate_hashed_bytes=selection_coverage["duplicate_selected_bytes"],
+        analysis="complete",
+        old_file_months=12,
+    )
     return replace(run, complete=True, duplicate_groups=groups, coverage=coverage)
 
 

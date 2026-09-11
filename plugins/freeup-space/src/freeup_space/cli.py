@@ -564,6 +564,42 @@ def cmd_start(args: argparse.Namespace) -> int:
         run = inventory(paths, args.platform, run_id, args.mode)
         _store_run(run)  # Resume can reuse this inventory if hashing is interrupted.
     if not run.complete:
+        # Publish a safe inventory checkpoint before the expensive duplicate pass.
+        # Applying is rejected while analysis_pending is set.
+        preliminary_run = replace(
+            run,
+            complete=True,
+            coverage=dict(run.coverage, analysis_pending=True,
+                           analysis_stage="inventory-complete",
+                           duplicates="pending"),
+        )
+        preliminary_plan = _build_plan(preliminary_run, preliminary_run.platform)
+        _store_plan(preliminary_plan)
+        _store_report(
+            preliminary_run.run_id,
+            coverage_markdown(preliminary_run) + render_markdown(preliminary_plan),
+        )
+        if args.summary_only:
+            provisional = tuple(
+                c for c in preliminary_plan.candidates
+                if c.actionable and c.risk is not Risk.REPORT_ONLY
+            )
+            print(_json_dump({
+                "event": "partial-results",
+                "run_id": preliminary_run.run_id,
+                "mode": preliminary_run.mode,
+                "status": "inventory-complete-analysis-pending",
+                "report_path": str(_report_path(preliminary_run.run_id).resolve()),
+                "candidate_count": len(provisional),
+                "duplicates": "pending",
+                "message": "Initial candidates are ready for review; exact duplicate analysis is still running.",
+                "candidates": [
+                    {"candidate_id": c.candidate_id, "path": str(c.path),
+                     "category": c.category, "risk": c.risk.value,
+                     "reclaimable_bytes": c.reclaimable_bytes}
+                    for c in provisional[:args.limit]
+                ],
+            }), file=sys.stderr, flush=True)
         run = analyze(run)
         _store_run(run)
     plan = _build_plan(run, run.platform)

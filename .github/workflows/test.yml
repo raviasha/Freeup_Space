@@ -28,7 +28,8 @@ jobs:
       - name: Install test dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install build pytest
+          python -m pip install build pytest playwright
+          python -m playwright install chromium
           python -m pip install -e plugins/freeup-space
 
       - name: Run packaging checks

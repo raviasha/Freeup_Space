@@ -186,7 +186,7 @@ def build_plan(
 ) -> CleanupPlan:
     """Build a deterministic plan from a completed inventory and additive evidence."""
 
-    if not run.complete:
+    if not run.complete and not run.coverage.get("analysis_pending"):
         raise PlanError("cleanup plans require a complete scan")
     if run.platform != policy.platform:
         raise PlanError("scan platform and policy platform do not match")

@@ -17,7 +17,18 @@ Hasher = Callable[[Path], str]
 _PARTIAL_BYTES = 64 * 1024
 
 
-def sha256_hasher(path: Path) -> str:
+class DuplicateAnalysisDeadlineExceeded(RuntimeError):
+    """Raised when a bounded duplicate-analysis pass reaches its deadline."""
+
+
+def _check_deadline(should_continue: Optional[Callable[[], bool]]) -> None:
+    if should_continue is not None and not should_continue():
+        raise DuplicateAnalysisDeadlineExceeded("duplicate analysis time budget exhausted")
+
+
+def sha256_hasher(
+    path: Path, *, should_continue: Optional[Callable[[], bool]] = None
+) -> str:
     """Hash a regular file without following its final symlink component."""
 
     with regular_descriptor(path) as descriptor:
@@ -25,6 +36,7 @@ def sha256_hasher(path: Path) -> str:
             raise OSError("duplicate hashing requires a regular file")
         digest = hashlib.sha256()
         while True:
+            _check_deadline(should_continue)
             block = os.read(descriptor, 1024 * 1024)
             if not block:
                 return digest.hexdigest()
@@ -40,18 +52,23 @@ def _matches_record(value, record: FileRecord) -> bool:
     )
 
 
-def _partial_fingerprint(record: FileRecord) -> Optional[str]:
+def _partial_fingerprint(
+    record: FileRecord, *, should_continue: Optional[Callable[[], bool]] = None
+) -> Optional[str]:
     try:
         with regular_descriptor(record.path) as descriptor:
+            _check_deadline(should_continue)
             before = os.fstat(descriptor)
             if not _matches_record(before, record):
                 return None
             head = os.read(descriptor, _PARTIAL_BYTES)
+            _check_deadline(should_continue)
             if record.size <= _PARTIAL_BYTES * 2:
                 tail = os.read(descriptor, _PARTIAL_BYTES)
             else:
                 os.lseek(descriptor, -_PARTIAL_BYTES, os.SEEK_END)
                 tail = os.read(descriptor, _PARTIAL_BYTES)
+            _check_deadline(should_continue)
             after = os.fstat(descriptor)
             if not _matches_record(after, record):
                 return None
@@ -87,12 +104,14 @@ def _current_snapshot(record: FileRecord) -> Optional[Tuple[int, int, int, int, 
 
 
 def find_duplicates(
-    files: Iterable[FileRecord], hasher: Hasher, *, progress=None
+    files: Iterable[FileRecord], hasher: Hasher, *, progress=None,
+    should_continue: Optional[Callable[[], bool]] = None,
 ) -> List[DuplicateGroup]:
     """Confirm exact duplicates while excluding aliases of one physical file."""
 
     by_identity = {}
     for record in sorted(files, key=lambda item: str(item.path)):
+        _check_deadline(should_continue)
         if record.file_kind != "regular" or record.size == 0:
             continue
         identity = (record.st_dev, record.st_ino)
@@ -104,26 +123,40 @@ def find_duplicates(
 
     groups: List[DuplicateGroup] = []
     for size in sorted(by_size):
+        _check_deadline(should_continue)
         size_group = sorted(by_size[size], key=lambda item: str(item.path))
         if len(size_group) < 2:
             continue
         by_partial: DefaultDict[str, List[FileRecord]] = defaultdict(list)
         for record in size_group:
-            fingerprint = _partial_fingerprint(record)
+            _check_deadline(should_continue)
+            fingerprint = _partial_fingerprint(record, should_continue=should_continue)
             if fingerprint is not None:
                 by_partial[fingerprint].append(record)
+            if progress is not None:
+                progress(record.path)
         for fingerprint in sorted(by_partial):
+            _check_deadline(should_continue)
             partial_group = by_partial[fingerprint]
             if len(partial_group) < 2:
                 continue
             by_digest: DefaultDict[str, List[FileRecord]] = defaultdict(list)
             for record in partial_group:
+                _check_deadline(should_continue)
                 before_hash = _current_snapshot(record)
                 if before_hash is None:
                     continue
                 try:
-                    claimed_digest = hasher(record.path)
-                    digest = claimed_digest if hasher is sha256_hasher else sha256_hasher(record.path)
+                    if hasher is sha256_hasher:
+                        claimed_digest = sha256_hasher(
+                            record.path, should_continue=should_continue
+                        )
+                        digest = claimed_digest
+                    else:
+                        claimed_digest = hasher(record.path)
+                        digest = sha256_hasher(
+                            record.path, should_continue=should_continue
+                        )
                 except (OSError, ValueError):
                     continue
                 if (

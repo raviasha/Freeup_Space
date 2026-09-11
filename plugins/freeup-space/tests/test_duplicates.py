@@ -1,7 +1,13 @@
 import os
 from pathlib import Path
 
-from freeup_space.duplicates import find_duplicates, sha256_hasher
+import pytest
+
+from freeup_space.duplicates import (
+    DuplicateAnalysisDeadlineExceeded,
+    find_duplicates,
+    sha256_hasher,
+)
 from freeup_space.models import FileRecord
 
 
@@ -122,3 +128,11 @@ def test_file_changed_during_full_hash_is_not_declared_duplicate(tmp_path):
         return digest
 
     assert find_duplicates([a, b], mutating_hasher) == []
+
+
+def test_duplicate_deadline_stops_before_reading_files(tmp_path):
+    a = make_file(tmp_path / "a.bin", b"same")
+    b = make_file(tmp_path / "b.bin", b"same")
+
+    with pytest.raises(DuplicateAnalysisDeadlineExceeded, match="time budget"):
+        find_duplicates([a, b], sha256_hasher, should_continue=lambda: False)

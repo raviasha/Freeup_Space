@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "freeup-space": {
+      "command": "python3",
+      "args": ["/Users/rampetaravishankar/plugins/freeup-space/scripts/freeup_widget.py"],
+      "startup_timeout_sec": 20,
+      "tool_timeout_sec": 120
+    }
+  }
+}

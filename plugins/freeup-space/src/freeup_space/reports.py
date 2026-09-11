@@ -152,7 +152,9 @@ def render_markdown(plan: CleanupPlan) -> str:
     else:
         lines.append("None.")
 
-    lines.extend(("", "## Actionable checklist", ""))
+    lines.extend(("", "## Actionable checklist", "",
+                  "Check the exact candidate IDs you approve. Reply with the checked IDs;"
+                  " the assistant will preview those IDs before moving anything.", ""))
     if actionable:
         for candidate in actionable:
             lines.append(

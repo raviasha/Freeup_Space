@@ -1,18 +1,22 @@
 {
   "name": "freeup-space",
-  "version": "0.1.0+codex.20260906105140",
+  "version": "0.1.0+codex.20260911083742",
   "description": "Review cleanup opportunities on macOS and Windows with Quick Scan, Deep Scan, or Deep Scan + AI.",
   "author": {
     "name": "Local developer"
   },
   "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
   "interface": {
     "displayName": "Freeup Space",
-    "shortDescription": "Choose Quick Scan, Deep Scan, or Deep Scan + AI.",
-    "longDescription": "Find disk cleanup opportunities on macOS and Windows using fixed-rule quick or deep scans, with optional AI investigation. Review a categorized checklist before moving approved files to Trash or Recycle Bin.",
+    "shortDescription": "Scan, select items and confirm cleanup in a widget.",
+    "longDescription": "Choose Quick Scan, Deep Scan or Deep Scan + AI in an interactive widget. Watch live progress, expand categories, select individual items, preview your selection and confirm recoverable moves to Trash or Recycle Bin.",
     "developerName": "Local developer",
     "category": "Productivity",
-    "capabilities": [],
-    "defaultPrompt": "Help me free up disk space. Ask me to choose Quick Scan, Deep Scan, or Deep Scan + AI before scanning."
+    "capabilities": [
+      "Interactive",
+      "Write"
+    ],
+    "defaultPrompt": "Open Freeup Space so I can choose a scan, review categories and select items to move to Trash."
   }
 }

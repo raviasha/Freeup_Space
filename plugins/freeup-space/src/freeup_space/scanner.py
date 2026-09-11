@@ -226,8 +226,7 @@ def scan_paths(
     pending = [(Path(root), None, None) for root in reversed(tuple(roots))]
 
     def report(current_path: Optional[Path], complete: bool = False) -> None:
-        progress(
-            ScanProgress(
+        update = ScanProgress(
                 files_scanned=len(files),
                 bytes_scanned=bytes_scanned,
                 directories_scanned=directories_scanned,
@@ -237,7 +236,9 @@ def scan_paths(
                 cancelled=cancel.is_set(),
                 current_path=current_path,
             )
-        )
+        progress(update)
+        from .widget_progress import publish
+        publish(update)
 
     def record_error(path: Path, operation: str, error: OSError) -> None:
         nonlocal errors_encountered
