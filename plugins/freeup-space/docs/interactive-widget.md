@@ -62,14 +62,21 @@ OS permissions remain applicable and may require a host approval or Full Disk Ac
 
 ## Verification
 
-This personal installation uses an absolute path to its local source checkout in
-`.mcp.json`. The legacy Codex MCP registration does not expand the
-`${CLAUDE_PLUGIN_ROOT}` argument. If the checkout moves or the plugin is installed
-on another machine, update that argument to the new `scripts/freeup_widget.py`
-path and reinstall. Do not treat an enabled plugin or a successful install as proof
-that its MCP process started: verify tool discovery includes `open_widget`.
-If tools are missing in an already-new task, diagnose registration and startup
-instead of repeatedly asking the user to open another task.
+The MCP launcher sets `cwd` to `.`. Codex resolves that directory relative to the
+installed plugin root, so `scripts/freeup_widget.py` is loaded from the installed
+package on both macOS and Windows. No source checkout, user-specific path, or
+plugin-root variable substitution is required.
+
+Python 3.9+ must be available as `python3` on PATH to the Codex process. On Windows,
+check `python3 --version` in PowerShell. If only `py -3` works, enable/install the
+`python3` command or configure the MCP interpreter for that Windows installation.
+Restart Codex after changing PATH so it inherits the updated environment.
+
+After updating from an older hard-coded-path version, refresh the GitHub marketplace,
+reinstall Freeup Space, and start a new Codex task. An enabled plugin or successful
+install is not proof that its MCP process started: verify discovery includes
+`open_widget`. If it is still missing, inspect the MCP startup error and Python
+availability instead of repeatedly reinstalling the same cached version.
 
 Run `python3 -m pytest -q` from the original plugin source location. The marketplace
 packaging test expects the personal-marketplace layout; in an isolated copy run

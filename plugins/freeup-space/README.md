@@ -39,7 +39,8 @@ If Codex reports a name conflict with another marketplace named `personal`, reso
 source conflict in marketplace settings; do not overwrite an unrelated marketplace.
 Start a new Codex task after installing or updating so the new skills load.
 
-**Python 3.9+ is required.** The plugin includes its runner and source; a separate
+**Python 3.9+ is required**, with `python3` available on PATH for the widget.
+The widget launcher uses the installed plugin directory on macOS and Windows. The plugin includes its runner and source; a separate
 repository clone, pip install, or virtual-environment activation is not required.
 The AI mode uses the Codex agent, not an additional API key or background model service.
 
