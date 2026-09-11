@@ -5,14 +5,14 @@ import json
 import os
 import secrets
 import subprocess
-import sys
 import threading
 import time
 from pathlib import Path
 
 from .investigation import validate_notes
+from .runtime import child_options, cli_command, plugin_root
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = plugin_root()
 BUSY = {"scanning", "previewing", "moving"}
 
 
@@ -87,11 +87,9 @@ class WidgetService:
         return json.loads((self.directory(session) / filename).read_text(encoding="utf-8"))
 
     def command(self, session, args, progress=False):
-        env = dict(os.environ)
-        env["FREEUP_WIDGET_PROGRESS"] = "1" if progress else "0"
-        process = subprocess.Popen([sys.executable, "-u", str(ROOT / "scripts/freeup_space.py"), *args],
-                                   cwd=session["workspace"], env=env, text=True,
-                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        options = child_options()
+        options["env"]["FREEUP_WIDGET_PROGRESS"] = "1" if progress else "0"
+        process = subprocess.Popen(cli_command(args), cwd=session["workspace"], **options)
         with self.lock:
             session["process"] = process
             if session["status"] == "cancelled":

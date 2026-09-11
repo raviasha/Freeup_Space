@@ -19,7 +19,18 @@ Fixed rules give repeatable decisions for the same inventory, policy and environ
 Live files, permissions and Quick's time budget can change results between runs.
 Choosing a mode never authorizes deletion.
 
-## Install through a GitHub marketplace
+## Install with Setup (recommended)
+
+Download the [installer for Windows or Mac](https://github.com/raviasha/Freeup_Space/releases/latest),
+open it and choose **Install / Update / Repair**. Codex must already be installed.
+Setup includes Python privately, verifies the runtime and widget, and leaves your files untouched.
+Open a new Codex task after setup says **Ready**.
+
+Rerun setup to repair; **Check for updates** opens the newest download. Existing source-based installs
+from this repository are migrated after the new install is verified. Other plugins are preserved.
+Unsigned releases may trigger OS publisher/security prompts; see the release notes.
+
+## Install source through a GitHub marketplace
 
 Use this repository link as the marketplace source in Codex:
 

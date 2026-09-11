@@ -10,7 +10,29 @@ Each new run offers:
 
 All modes produce a categorized, unchecked review report. Selecting a mode is never deletion approval.
 
-## Install from GitHub
+## Easy setup (recommended)
+
+[Download Freeup Space Setup](https://github.com/raviasha/Freeup_Space/releases/latest).
+
+1. Install and open the Codex desktop app first.
+2. Download **Windows x64**, **macOS Apple Silicon**, or **macOS Intel** for your computer.
+3. Open **Freeup Space Setup** and click **Install / Update / Repair**.
+4. Once setup says **Ready**, open a new Codex task and ask **“Open Freeup Space.”**
+
+The installer includes its own runtime. You do not need Python, pip, Git, a terminal, or PATH changes.
+It installs for your user account, checks the widget connection, and never cleans your files.
+If Codex is not detected automatically, setup provides a **Choose Codex** option and setup details.
+
+To repair, rerun the same installer. To update, click **Check for updates** and download the newest installer.
+The installer replaces the older registration from this GitHub repository after checking the new one.
+Other plugins and personal marketplaces are preserved. Old runtime versions remain available to open tasks.
+
+These initial installers are **not publisher-signed or notarized**. Your OS may warn or block them;
+managed computers may require an administrator-approved signed build. Setup does not disable security protections.
+
+## Source installation (developers)
+
+The source-based GitHub marketplace remains available and requires Python:
 
 Add this repository URL as a marketplace source in Codex, then install **Freeup Space**:
 

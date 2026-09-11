@@ -3,5 +3,9 @@ set -eu
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 PLUGIN_ROOT=$(dirname -- "$SCRIPT_DIR")
+if [ -f "$PLUGIN_ROOT/.runtime-path" ]; then
+    IFS= read -r FREEUP_RUNTIME < "$PLUGIN_ROOT/.runtime-path" || [ -n "$FREEUP_RUNTIME" ]
+    exec "$FREEUP_RUNTIME" --cli "$@"
+fi
 PYTHONPATH="$PLUGIN_ROOT/src${PYTHONPATH:+:$PYTHONPATH}" exec python3 -c \
     'from freeup_space.cli import main; raise SystemExit(main())' "$@"

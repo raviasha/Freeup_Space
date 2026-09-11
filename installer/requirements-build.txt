@@ -1,0 +1,3 @@
+# Build dependency only; end users install no Python packages.
+pyinstaller==6.22.2
+pyinstaller-hooks-contrib==2026.7

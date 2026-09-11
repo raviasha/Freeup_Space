@@ -1,6 +1,6 @@
 {
   "name": "freeup-space",
-  "version": "0.1.0+codex.20260911094535",
+  "version": "0.2.0",
   "description": "Review cleanup opportunities on macOS and Windows with Quick Scan, Deep Scan, or Deep Scan + AI.",
   "author": {
     "name": "Local developer"
