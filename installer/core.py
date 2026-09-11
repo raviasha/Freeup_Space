@@ -53,12 +53,12 @@ def _external_environment():
             ctypes.windll.kernel32.SetDllDirectoryW(str(bundle) if bundle else None)
 
 
-def _run(args, *, input=None, timeout=90):
+def _run(args, *, input=None, timeout=90, cwd=None):
     try:
         with _external_environment() as env:
             result = subprocess.run([str(arg) for arg in args], input=input,
                                     capture_output=True, encoding='utf-8', errors='replace',
-                                    timeout=timeout, check=True, env=env,
+                                    timeout=timeout, check=True, env=env, cwd=cwd,
                                     **({'creationflags': 0x08000000} if sys.platform == 'win32' else {}))
         return result.stdout
     except (OSError, subprocess.SubprocessError) as error:
@@ -66,9 +66,9 @@ def _run(args, *, input=None, timeout=90):
         raise SetupError(f"Could not run {args[0]} {' '.join(str(a) for a in args[1:])}: {detail}") from error
 
 
-def _json_command(args):
+def _json_command(args, **kwargs):
     try:
-        value = json.loads(_run(args))
+        value = json.loads(_run(args, **kwargs))
         if not isinstance(value, dict):
             raise ValueError('expected an object')
         return value
@@ -190,8 +190,8 @@ def _entries(value, key):
     return entries
 
 
-def _health(runtime, version):
-    doctor = _json_command([runtime, '--doctor'])
+def _health(runtime, version, cwd):
+    doctor = _json_command([runtime, '--doctor'], cwd=cwd)
     if doctor.get('ok') is not True or doctor.get('version') != version:
         raise SetupError('The bundled runtime did not pass diagnostics or its version does not match. Download setup again.')
     requests = [
@@ -201,7 +201,7 @@ def _health(runtime, version):
         {'jsonrpc': '2.0', 'method': 'notifications/initialized'},
         {'jsonrpc': '2.0', 'id': 2, 'method': 'resources/read', 'params': {'uri': RESOURCE_URI}},
     ]
-    output = _run([runtime, '--mcp'], input=''.join(json.dumps(r) + '\n' for r in requests), timeout=30)
+    output = _run([runtime, '--mcp'], input=''.join(json.dumps(r) + '\n' for r in requests), timeout=30, cwd=cwd)
     try:
         responses = {r['id']: r for r in (json.loads(line) for line in output.splitlines()) if 'id' in r}
         hello = responses[1]['result']
@@ -318,11 +318,13 @@ def _install_unlocked(payload: Path, destination: Path, codex: Path, progress) -
         installed_manifest = dict(manifest, version=installed_version)
         _atomic_write(plugin_root / '.codex-plugin/plugin.json', _encode(installed_manifest))
         config = {'mcpServers': {'freeup-space': {'command': str(runtime), 'args': ['--mcp'],
-                   'cwd': '.', 'startup_timeout_sec': 20, 'tool_timeout_sec': 120}}}
+                   'cwd': str(plugin_root), 'startup_timeout_sec': 20, 'tool_timeout_sec': 120}}}
         _atomic_write(plugin_root / '.mcp.json', _encode(config))
         _atomic_write(plugin_root / '.runtime-path', (str(runtime) + '\n').encode('utf-8'))
         progress('Verifying runtime and widget…')
-        _health(runtime, version)
+        # Codex may evict an old plugin cache while a task still has its MCP
+        # configuration. Both executable and cwd must live in retained storage.
+        _health(runtime, version, plugin_root)
         marketplace = {'name': 'freeup-space', 'interface': {'displayName': 'Freeup Space'},
                        'plugins': [{'name': 'freeup-space', 'source': {'source': 'local', 'path': f'./versions/{version_id}/plugin'},
                                     'policy': {'installation': 'AVAILABLE', 'authentication': 'ON_INSTALL'}, 'category': 'Utilities'}]}
@@ -345,7 +347,8 @@ def _install_unlocked(payload: Path, destination: Path, codex: Path, progress) -
         reported_config = _read_json(Path(source_path) / '.mcp.json')
         if reported_config != config:
             raise SetupError('The registered plugin runtime configuration does not match this installation.')
-        _health(Path(reported_config['mcpServers']['freeup-space']['command']), version)
+        transport = reported_config['mcpServers']['freeup-space']
+        _health(Path(transport['command']), version, Path(transport['cwd']))
     except Exception as error:
         rollback_errors = []
         if changed_catalog:

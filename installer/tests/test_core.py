@@ -104,7 +104,7 @@ def test_install_and_repair_keep_immutable_versions(fixture):
     cfg = json.loads(first_config)['mcpServers']['freeup-space']
     assert Path(cfg['command']).is_absolute()
     assert Path(cfg['command']).is_file()
-    assert cfg['args'] == ['--mcp'] and cfg['cwd'] == '.'
+    assert cfg['args'] == ['--mcp'] and Path(cfg['cwd']) == first['plugin_root']
     assert json.loads((payload / 'plugin/.mcp.json').read_text(encoding='utf-8')) == {'portable': True}
     assert sum('--mcp' in call for call in host.calls) >= 2
 
@@ -433,3 +433,30 @@ def test_install_rejects_desktop_executable_before_writing(fixture, monkeypatch)
     with pytest.raises(core.SetupError, match='CLI'):
         core.install(payload, destination, codex)
     assert not destination.exists()
+
+
+def test_widget_startup_directory_survives_codex_cache_eviction(fixture, tmp_path):
+    import shutil
+    payload, destination, codex, _ = fixture
+    result = core.install(payload, destination, codex)
+    source = Path(result['plugin_root'])
+    cache = tmp_path / 'codex-cache' / result['installed_version']
+    shutil.copytree(source, cache)
+    cfg = json.loads((cache / '.mcp.json').read_text(encoding='utf-8'))['mcpServers']['freeup-space']
+    launch_directory = cache / cfg['cwd']
+    shutil.rmtree(cache)  # Synthetic cache only: model Codex replacing a plugin cache.
+    assert Path(cfg['command']).is_file()
+    assert launch_directory.is_dir(), 'An old task must remain startable after its cache is replaced'
+
+
+def test_runtime_checks_use_the_registered_working_directory(fixture, monkeypatch):
+    payload, destination, codex, host = fixture
+    directories = []
+    def run(args, **kwargs):
+        if '--doctor' in args or '--mcp' in args:
+            directories.append(kwargs.get('cwd'))
+        return host.run(args, **kwargs)
+    monkeypatch.setattr(core.subprocess, 'run', run)
+    result = core.install(payload, destination, codex)
+    assert len(directories) == 4
+    assert all(directory is not None and Path(directory) == result['plugin_root'] for directory in directories)

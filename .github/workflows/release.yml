@@ -2,7 +2,7 @@ name: Build installers
 
 on:
   push:
-    branches: [main, 'codex/self-contained-setup', 'codex/windows-setup-detection']
+    branches: [main, 'codex/self-contained-setup', 'codex/windows-setup-detection', 'codex/stable-widget-startup']
     tags: ['v*']
   workflow_dispatch:
 

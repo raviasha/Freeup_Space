@@ -53,3 +53,11 @@ Windows execution aliases retain their original path instead of resolving into a
 package target. Setup never changes package permissions or elevates itself. If no candidate
 can be executed, repair/update the Codex installation or contact the device administrator;
 setup cannot override a device policy that denies execution.
+
+## Widget startup after updates
+
+The generated MCP working directory is an absolute path inside the retained installation,
+as is the executable. It must not point to Codex's replaceable plugin cache: an older task
+can otherwise fail with `No such file or directory` when that cache is removed, even though
+the runtime itself still exists. Setup checks the runtime and widget from the exact working
+directory it registers, both before and after registration.
