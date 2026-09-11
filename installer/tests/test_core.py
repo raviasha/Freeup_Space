@@ -40,12 +40,12 @@ class Host:
         elif tail[:3] == ['plugin', 'marketplace', 'add']:
             self.marketplaces = [{'name': 'freeup-space', 'root': str(self.destination)}]
         elif tail[:2] == ['plugin', 'add']:
-            catalog = json.loads((self.destination / '.agents/plugins/marketplace.json').read_text())
+            catalog = json.loads((self.destination / '.agents/plugins/marketplace.json').read_text(encoding='utf-8'))
             plugin = (self.destination / catalog['plugins'][0]['source']['path']).resolve()
             self.installed = [p for p in self.installed if p['pluginId'] != tail[2]]
             self.installed.append({'pluginId': tail[2], 'name': 'freeup-space',
                                    'installed': True, 'enabled': not self.disabled,
-                                   'version': json.loads((plugin / '.codex-plugin/plugin.json').read_text())['version'],
+                                   'version': json.loads((plugin / '.codex-plugin/plugin.json').read_text(encoding='utf-8'))['version'],
                                    'source': {'source': 'local', 'path': str(plugin)}})
         elif tail[:2] == ['plugin', 'remove']:
             self.installed = [p for p in self.installed if p['pluginId'] != tail[2]]
@@ -98,7 +98,7 @@ def test_install_and_repair_keep_immutable_versions(fixture):
     assert Path(cfg['command']).is_absolute()
     assert Path(cfg['command']).is_file()
     assert cfg['args'] == ['--mcp'] and cfg['cwd'] == '.'
-    assert json.loads((payload / 'plugin/.mcp.json').read_text()) == {'portable': True}
+    assert json.loads((payload / 'plugin/.mcp.json').read_text(encoding='utf-8')) == {'portable': True}
     assert sum('--mcp' in call for call in host.calls) >= 2
 
 
@@ -199,7 +199,7 @@ def test_install_stamps_native_cli_runtime_path(fixture):
     payload, destination, codex, host = fixture
     result = core.install(payload, destination, codex)
     plugin = Path(result['plugin_root'])
-    command = json.loads((plugin / '.mcp.json').read_text())['mcpServers']['freeup-space']['command']
+    command = json.loads((plugin / '.mcp.json').read_text(encoding='utf-8'))['mcpServers']['freeup-space']['command']
     assert (plugin / '.runtime-path').read_text(encoding='utf-8') == command + '\n'
     assert not (payload / 'plugin/.runtime-path').exists()
 
@@ -279,11 +279,11 @@ def test_repair_busts_codex_cache_while_doctor_keeps_payload_version(fixture):
     payload, destination, codex, host = fixture
     first = core.install(payload, destination, codex)
     second = core.install(payload, destination, codex)
-    first_manifest = json.loads((Path(first['plugin_root']) / '.codex-plugin/plugin.json').read_text())
-    second_manifest = json.loads((Path(second['plugin_root']) / '.codex-plugin/plugin.json').read_text())
+    first_manifest = json.loads((Path(first['plugin_root']) / '.codex-plugin/plugin.json').read_text(encoding='utf-8'))
+    second_manifest = json.loads((Path(second['plugin_root']) / '.codex-plugin/plugin.json').read_text(encoding='utf-8'))
     assert first_manifest['version'] != second_manifest['version']
     assert first_manifest['version'] == first['installed_version']
     assert second_manifest['version'] == second['installed_version']
     assert first['version'] == second['version'] == '1.2.3'
     assert host.installed[-1]['version'] == second['installed_version']
-    assert json.loads((payload / 'plugin/.codex-plugin/plugin.json').read_text())['version'] == '1.2.3'
+    assert json.loads((payload / 'plugin/.codex-plugin/plugin.json').read_text(encoding='utf-8'))['version'] == '1.2.3'

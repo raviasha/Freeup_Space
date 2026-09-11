@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 from installer.build import stage_payload
@@ -23,4 +24,6 @@ def test_staged_payload_omits_local_state_and_preserves_source_launcher(tmp_path
     assert not (payload / 'plugin/.venv').exists()
     assert not (payload / 'plugin/.freeup-space').exists()
     assert not (payload / 'plugin/tests').exists()
-    assert (payload / 'runtime/freeup-space').stat().st_mode & 0o111
+    assert (payload / 'runtime/freeup-space').read_bytes() == b'executable'
+    if os.name != 'nt':
+        assert (payload / 'runtime/freeup-space').stat().st_mode & 0o111

@@ -1,4 +1,5 @@
 import io
+import os
 import tarfile
 from pathlib import Path
 
@@ -15,15 +16,15 @@ def test_payload_round_trip_keeps_runtime_executable_and_symlinks(tmp_path):
     executable.chmod(0o755)
     (source / 'plugin').mkdir()
     (source / 'plugin' / 'README.md').write_text('plugin')
-    if __import__('os').name != 'nt':
+    if os.name != 'nt':
         (source / 'runtime' / 'alias').symlink_to('freeup-space')
     archive = tmp_path / 'payload.tar.gz'
     pack_payload(source, archive)
     destination = tmp_path / 'extracted'
     extract_payload(archive, destination)
     assert (destination / 'runtime/freeup-space').read_bytes() == b'bundled-runtime'
-    assert (destination / 'runtime/freeup-space').stat().st_mode & 0o111
-    if __import__('os').name != 'nt':
+    if os.name != 'nt':
+        assert (destination / 'runtime/freeup-space').stat().st_mode & 0o111
         assert (destination / 'runtime/alias').is_symlink()
 
 
