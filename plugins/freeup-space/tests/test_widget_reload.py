@@ -110,3 +110,62 @@ def test_visibility_reconnect_blocks_controls_until_live_status():
     finally:
         process.terminate()
         process.communicate(timeout=10)
+
+
+@pytest.mark.parametrize('remount', [False, True])
+@pytest.mark.parametrize('blocked', [False, True])
+def test_back_to_selection_preserves_choices_and_allows_repreview(remount, blocked):
+    playwright_api = pytest.importorskip('playwright.sync_api')
+    expect = playwright_api.expect
+    root = Path(__file__).resolve().parents[1]
+    process = subprocess.Popen([sys.executable, '-u', str(root / 'tests/widget_harness.py')],
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        url = process.stdout.readline().strip()
+        with playwright_api.sync_playwright() as playwright:
+            browser = playwright.chromium.launch(channel=os.environ.get('FREEUP_TEST_BROWSER_CHANNEL'))
+            page = browser.new_page()
+            calls = []
+            page.on('request', lambda request: calls.append(request.post_data_json['name'])
+                    if request.url.endswith('/api') and request.method == 'POST' else None)
+            page.goto(url)
+            widget = page.frame_locator('#widget')
+            widget.get_by_role('button', name='Start scan', exact=True).click()
+            expect(widget.get_by_role('heading', name='Review by category')).to_be_visible(timeout=20000)
+            widget.get_by_role('button', name='Archives').click()
+            widget.get_by_role('checkbox').nth(0).check()
+            widget.get_by_role('checkbox').nth(1).check()
+            candidate = widget.locator('body').evaluate('() => state.candidates[0]')
+            if blocked:
+                path = Path(candidate['path'])
+                assert any(p.name.startswith('freeup-widget-test-') for p in path.parents)
+                path.write_bytes(b'changed temporary fixture')
+            widget.get_by_role('button', name='Preview selection').click()
+            expect(widget.get_by_role('heading', name='Confirm your cleanup')).to_be_visible(timeout=10000)
+            if blocked:
+                expect(widget.get_by_role('button', name='Confirm move to Trash')).to_be_disabled()
+            if remount:
+                page.locator('#widget').evaluate('(frame) => frame.src = frame.src')
+                expect(widget.get_by_role('heading', name='Confirm your cleanup')).to_be_visible(timeout=10000)
+            widget.get_by_role('button', name='Back to selection').click()
+            expect(widget.get_by_role('heading', name='Review by category')).to_be_visible()
+            expect(widget.get_by_role('heading', name='Confirm your cleanup')).to_have_count(0)
+            expect(widget.locator('#selection')).to_contain_text('2 selected')
+            if remount:
+                widget.get_by_role('button', name='Archives').click()
+            expect(widget.get_by_role('checkbox').nth(0)).to_be_checked()
+            expect(widget.get_by_role('checkbox').nth(1)).to_be_checked()
+            widget.get_by_role('checkbox').nth(0).uncheck()
+            widget.get_by_role('button', name='Preview selection').click()
+            expect(widget.get_by_role('heading', name='Confirm your cleanup')).to_be_visible(timeout=10000)
+            expect(widget.get_by_role('button', name='Confirm move to Trash')).to_be_enabled()
+            preview = widget.locator('body').evaluate('() => state.preview')
+            assert len(preview['ids']) == 1
+            assert candidate['candidate_id'] not in preview['ids']
+            assert not preview['blocked']
+            assert calls.count('start_scan') == 1
+            assert 'confirm_trash' not in calls
+            browser.close()
+    finally:
+        process.terminate()
+        process.communicate(timeout=10)
