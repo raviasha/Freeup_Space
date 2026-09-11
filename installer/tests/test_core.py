@@ -368,3 +368,68 @@ def test_failed_staging_keeps_ownership_for_repair(fixture):
     host.fail = None
     result = core.install(payload, destination, codex)
     assert result['version'] == '1.2.3'
+
+
+def test_selection_skips_access_denied_launcher_and_uses_working_cli(tmp_path, monkeypatch):
+    denied = tmp_path / 'WindowsApps/codex.exe'
+    usable = tmp_path / 'Codex/app/resources/codex.exe'
+    for path in (denied, usable):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch()
+    def run(args, **kwargs):
+        if Path(args[0]) == denied:
+            raise PermissionError(13, '[WinError 5] Access is denied', str(denied))
+        output = 'codex-cli 0.153.4' if args[1:] == ['--version'] else 'Usage: plugin command --json'
+        return subprocess.CompletedProcess(args, 0, output, '')
+    monkeypatch.setattr(core.subprocess, 'run', run)
+    messages = []
+    assert core.select_codex([denied, usable], progress=messages.append) == usable
+    assert any(str(denied) in message and 'denied' in message for message in messages)
+
+
+@pytest.mark.parametrize('response', ['', 'Codex Desktop 1.0', 'codex-cli 0.153.4'])
+def test_selection_rejects_gui_and_unsupported_cli(tmp_path, monkeypatch, response):
+    launcher = tmp_path / 'codex.exe'
+    launcher.touch()
+    def run(args, **kwargs):
+        return subprocess.CompletedProcess(args, 0, response if '--version' in args else 'Unsupported command', '')
+    monkeypatch.setattr(core.subprocess, 'run', run)
+    with pytest.raises(core.SetupError, match='usable Codex'):
+        core.select_codex([launcher])
+
+
+def test_selection_skips_unresponsive_launcher(tmp_path, monkeypatch):
+    paths = [tmp_path / name for name in ('hung', 'working')]
+    for path in paths:
+        path.touch()
+    def run(args, **kwargs):
+        if Path(args[0]) == paths[0]:
+            raise subprocess.TimeoutExpired(args, kwargs['timeout'])
+        return subprocess.CompletedProcess(args, 0, 'codex-cli 0.153.4' if '--version' in args else '--json', '')
+    monkeypatch.setattr(core.subprocess, 'run', run)
+    assert core.select_codex(paths) == paths[1]
+
+
+def test_windows_discovery_prefers_bundled_cli_over_path_alias(tmp_path, monkeypatch):
+    alias = tmp_path / 'WindowsApps/codex.exe'
+    bundled = tmp_path / 'Programs/Codex/resources/codex.exe'
+    for path in (alias, bundled):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch()
+    monkeypatch.setattr(core.sys, 'platform', 'win32')
+    monkeypatch.setenv('LOCALAPPDATA', str(tmp_path))
+    monkeypatch.setattr(core.shutil, 'which', lambda name: str(alias) if name == 'codex' else None)
+    assert core.discover_codex()[0] == bundled
+
+
+def test_install_rejects_desktop_executable_before_writing(fixture, monkeypatch):
+    payload, destination, codex, host = fixture
+    original = host.run
+    def run(args, **kwargs):
+        if args[1:] == ['--version']:
+            return subprocess.CompletedProcess(args, 0, '', '')
+        return original(args, **kwargs)
+    monkeypatch.setattr(core.subprocess, 'run', run)
+    with pytest.raises(core.SetupError, match='CLI'):
+        core.install(payload, destination, codex)
+    assert not destination.exists()

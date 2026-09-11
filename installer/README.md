@@ -40,3 +40,16 @@ publishes a GitHub release only after all platform package checks pass. Checksum
 installer. Release notes explicitly describe signing status.
 
 Third-party runtime license notices are included in the payload under `licenses/`.
+
+## Codex detection and Windows access errors
+
+Setup prefers the desktop app's bundled CLI and verifies `codex-cli --version` output and
+plugin command support before enabling installation. Inaccessible PATH aliases, launchers
+that do not identify themselves as the CLI, unsupported CLIs, and timed-out probes are skipped.
+Each probe is bounded to 10 seconds. Paths and failure details appear in the live Setup details
+log; Retry detection and Choose Codex are recovery controls in that dialog.
+
+Windows execution aliases retain their original path instead of resolving into a protected
+package target. Setup never changes package permissions or elevates itself. If no candidate
+can be executed, repair/update the Codex installation or contact the device administrator;
+setup cannot override a device policy that denies execution.

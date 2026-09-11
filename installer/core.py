@@ -63,7 +63,7 @@ def _run(args, *, input=None, timeout=90):
         return result.stdout
     except (OSError, subprocess.SubprocessError) as error:
         detail = getattr(error, 'stderr', None) or str(error)
-        raise SetupError(f"Could not run {Path(args[0]).name} {' '.join(str(a) for a in args[1:])}: {detail}") from error
+        raise SetupError(f"Could not run {args[0]} {' '.join(str(a) for a in args[1:])}: {detail}") from error
 
 
 def _json_command(args):
@@ -83,8 +83,6 @@ def _mac_application_roots():
 def discover_codex() -> list[Path]:
     candidates = []
     found = shutil.which('codex')
-    if found:
-        candidates.append(Path(found))
     if sys.platform == 'darwin':
         for root in _mac_application_roots():
             for name in ('Codex.app', 'ChatGPT.app'):
@@ -103,14 +101,54 @@ def discover_codex() -> list[Path]:
             except (SetupError, ValueError, TypeError):
                 pass  # The GUI also allows browsing for a CLI.
         for root in roots:
-            for relative in ('codex.exe', 'resources/codex.exe', 'app/resources/codex.exe',
-                             'resources/bin/codex.exe', 'app/resources/bin/codex.exe'):
+            for relative in ('resources/codex.exe', 'app/resources/codex.exe',
+                             'resources/bin/codex.exe', 'app/resources/bin/codex.exe', 'codex.exe'):
                 candidates.append(root / relative)
+    # Prefer the desktop app's bundled CLI over PATH aliases and launchers.
+    if found:
+        candidates.append(Path(found))
     result = []
     for candidate in candidates:
-        if candidate.is_file() and candidate.resolve() not in result:
-            result.append(candidate.resolve())
+        try:
+            # Preserve Windows execution aliases instead of resolving their
+            # reparse target into a protected package location.
+            candidate = candidate.absolute()
+            if candidate.is_file() and candidate not in result:
+                result.append(candidate)
+        except OSError:
+            continue
     return result
+
+
+def _verify_codex(codex):
+    version = _run([codex, '--version'], timeout=10).strip()
+    if not re.fullmatch(r'codex-cli \d+\.\d+\.\d+[^\r\n]*', version):
+        raise SetupError(f'{codex} is not a working Codex CLI. Select the bundled command in the app resources folder.')
+    for command in (['plugin', 'add'], ['plugin', 'remove'],
+                    ['plugin', 'marketplace', 'add'], ['plugin', 'marketplace', 'remove']):
+        if '--json' not in _run([codex, *command, '--help'], timeout=10):
+            raise SetupError(f'{codex} does not support the required plugin commands. Update the Codex desktop app.')
+
+
+def select_codex(candidates=None, progress=lambda message: None) -> Path:
+    """Select a runnable, compatible CLI before any installation writes."""
+    failures = []
+    for candidate in discover_codex() if candidates is None else candidates:
+        candidate = Path(candidate).absolute()
+        progress(f'Checking Codex command: {candidate}')
+        try:
+            _verify_codex(candidate)
+        except SetupError as error:
+            failures.append(str(error))
+            progress(f'Skipping unavailable Codex command: {error}')
+            continue
+        progress(f'Verified Codex command: {candidate}')
+        return candidate
+    detail = (' Last check: ' + failures[-1]) if failures else ''
+    raise SetupError('No usable Codex command was found. Install or update the Codex desktop app, '
+                     'open it once, then retry setup. Setup details lets you choose its bundled CLI. '
+                     'If Windows denies access to every candidate, the app installation or device policy '
+                     'needs attention; setup cannot override that restriction.' + detail)
 
 
 def default_install_root() -> Path:
@@ -228,16 +266,11 @@ def install(payload: Path, destination: Path, codex: Path, progress=lambda messa
 
 def _install_unlocked(payload: Path, destination: Path, codex: Path, progress) -> dict:
     """Install/repair from an expanded setup payload; raise actionable SetupError."""
-    payload, destination, codex = Path(payload).resolve(), Path(destination).resolve(), Path(codex).resolve()
+    payload, destination, codex = Path(payload).resolve(), Path(destination).resolve(), Path(codex).absolute()
     if not codex.is_file():
         raise SetupError('Codex CLI was not found. Install/update the Codex desktop app or browse to its bundled CLI.')
     progress('Checking Codex plugin support…')
-    _run([codex, '--version'])
-    for command in (['plugin', 'add'], ['plugin', 'remove'],
-                    ['plugin', 'marketplace', 'add'], ['plugin', 'marketplace', 'remove']):
-        help_text = _run([codex, *command, '--help'])
-        if '--json' not in help_text:
-            raise SetupError('This Codex CLI does not support the required plugin commands. Update the Codex desktop app.')
+    _verify_codex(codex)
     marketplaces = _entries(_json_command([codex, 'plugin', 'marketplace', 'list', '--json']), 'marketplaces')
     previous_plugins = _entries(_json_command([codex, 'plugin', 'list', '--json']), 'installed')
     existing_market = next((m for m in marketplaces if m.get('name') == 'freeup-space'), None)

@@ -11,7 +11,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 from installer.bundle import extract_payload
-from installer.core import SetupError, default_install_root, discover_codex, install
+from installer.core import SetupError, default_install_root, select_codex, install
 from installer.health import smoke_runtime
 
 RELEASES_URL = 'https://github.com/raviasha/Freeup_Space/releases/latest'
@@ -65,12 +65,23 @@ def show_setup(archive):
     bar.pack(fill='x', pady=(0, 16))
     events = queue.Queue()
     context = {'busy': True, 'codex': None, 'result': None, 'log': [], 'destination': default_install_root()}
+    recovery_buttons = []
     actions = ttk.Frame(frame)
     actions.pack(fill='x')
 
-    def log_message(message):
+    def log_message(message, show_status=True):
         context['log'].append(str(message))
-        status.set(str(message))
+        if show_status:
+            status.set(str(message))
+
+    def set_busy(busy):
+        context['busy'] = busy
+        install_button.configure(state='normal' if not busy and context['codex'] else 'disabled')
+        open_button.configure(state='normal' if not busy and context['result'] else 'disabled')
+        for button in recovery_buttons:
+            if button.winfo_exists():
+                button.configure(state='disabled' if busy else 'normal')
+        bar.start(12) if busy else bar.stop()
 
     def work():
         try:
@@ -87,19 +98,15 @@ def show_setup(archive):
     def start():
         if context['busy'] or not context['codex']:
             return
-        context['busy'] = True
-        install_button.configure(state='disabled')
-        browse_button.configure(state='disabled')
-        open_button.configure(state='disabled')
-        bar.start(12)
+        context['result'] = None
+        set_busy(True)
         threading.Thread(target=work, daemon=False).start()
 
-    def choose_codex():
-        selected = filedialog.askopenfilename(title='Choose the Codex executable')
+    def choose_codex(dialog):
+        selected = filedialog.askopenfilename(parent=dialog, title='Choose the bundled Codex CLI (resources/codex.exe on Windows)')
         if selected:
-            context['codex'] = selected
-            log_message('Codex selected. Ready to install or repair Freeup Space.')
-            install_button.configure(state='normal')
+            dialog.destroy()
+            begin_discovery([Path(selected)])
 
     def open_plugin():
         result = context['result']
@@ -113,8 +120,6 @@ def show_setup(archive):
     open_button.pack(side='right')
     links = ttk.Frame(frame)
     links.pack(fill='x', pady=(16, 8))
-    browse_button = ttk.Button(links, text='Choose Codex…', command=choose_codex, state='disabled')
-    browse_button.pack(side='left')
     ttk.Button(links, text='Check for updates', command=lambda: webbrowser.open(RELEASES_URL)).pack(side='right')
 
     def show_log():
@@ -124,6 +129,22 @@ def show_setup(archive):
         text.pack(fill='both', expand=True)
         text.insert('1.0', 'Setup folder: '+str(context['destination'])+'\n\n'+('\n\n'.join(context['log']) or 'No setup actions yet.'))
         text.configure(state='disabled')
+        shown_count = len(context['log'])
+
+        def refresh_log():
+            nonlocal shown_count
+            if not dialog.winfo_exists():
+                return
+            if shown_count != len(context['log']):
+                text.configure(state='normal')
+                text.delete('1.0', 'end')
+                text.insert('1.0', 'Setup folder: '+str(context['destination'])+'\n\n'+'\n\n'.join(context['log']))
+                text.configure(state='disabled')
+                text.see('end')
+                shown_count = len(context['log'])
+            dialog.after(200, refresh_log)
+
+        dialog.after(200, refresh_log)
 
         def choose_folder():
             selected = filedialog.askdirectory(parent=dialog, title='Choose an empty folder dedicated to Freeup Space',
@@ -133,31 +154,48 @@ def show_setup(archive):
                 log_message('Setup folder selected. Click Install / Update / Repair to retry.')
                 dialog.destroy()
 
-        ttk.Button(dialog, text='Choose setup folder…', command=choose_folder,
-                   state='disabled' if context['busy'] else 'normal').pack(padx=12, pady=12, anchor='w')
+        controls = ttk.Frame(dialog)
+        controls.pack(fill='x', padx=12, pady=12)
+        def retry_detection():
+            dialog.destroy()
+            begin_discovery()
+        for label, command in [('Retry detection', retry_detection),
+                               ('Choose Codex…', lambda: choose_codex(dialog)),
+                               ('Choose setup folder…', choose_folder)]:
+            button = ttk.Button(controls, text=label, command=command,
+                                state='disabled' if context['busy'] else 'normal')
+            button.pack(side='left', padx=(0, 8))
+            recovery_buttons.append(button)
 
     ttk.Button(frame, text='Setup details', command=show_log).pack(anchor='w')
 
-    def discover():
+    def discover(candidates):
         try:
-            events.put(('host', discover_codex()))
+            command = select_codex(candidates, progress=lambda message: events.put(('detail', message)))
+            events.put(('host', command))
         except Exception as error:
-            events.put(('error', 'Could not locate Codex: '+str(error)))
+            events.put(('host_error', str(error)))
+
+    def begin_discovery(candidates=None):
+        context['codex'] = None
+        context['result'] = None
+        set_busy(True)
+        log_message('Checking available Codex commands…')
+        threading.Thread(target=discover, args=(candidates,), daemon=True).start()
 
     def drain_events():
         try:
             while True:
                 kind, value = events.get_nowait()
-                if kind == 'progress':
-                    log_message(value)
+                if kind in ('progress', 'detail'):
+                    log_message(value, show_status=kind == 'progress')
                     continue
-                context['busy'] = False
-                bar.stop()
-                browse_button.configure(state='normal')
                 if kind == 'host':
-                    context['codex'] = str(value[0]) if value else None
-                    log_message('Codex found. Ready to install or repair Freeup Space.' if value else
-                                'Codex was not found. Install and open the Codex desktop app, then reopen setup. If it is already installed, use Choose Codex.')
+                    context['codex'] = str(value)
+                    log_message('Codex verified. Ready to install or repair Freeup Space.')
+                elif kind == 'host_error':
+                    log_message(value, show_status=False)
+                    status.set('Codex could not be verified. Open Setup details to see the reason or retry detection.')
                 elif kind == 'ready':
                     context['result'] = value
                     warnings = value.get('warnings', [])
@@ -165,10 +203,10 @@ def show_setup(archive):
                         log_message('Installed, with something to check: '+' '.join(warnings)+' See Setup details.')
                     else:
                         log_message('Ready! Open a new Codex task and ask “Open Freeup Space”.')
-                    open_button.configure(state='normal')
                 else:
-                    log_message('Setup needs attention: '+str(value)+' See Setup details for recovery options.')
-                install_button.configure(state='normal' if context['codex'] else 'disabled')
+                    log_message(value, show_status=False)
+                    status.set('Setup could not finish. Open Setup details for the error and recovery options.')
+                set_busy(False)
         except queue.Empty:
             pass
         root.after(100, drain_events)
@@ -180,7 +218,7 @@ def show_setup(archive):
             root.destroy()
 
     root.protocol('WM_DELETE_WINDOW', close)
-    threading.Thread(target=discover, daemon=True).start()
+    begin_discovery()
     root.after(100, drain_events)
     root.mainloop()
 
