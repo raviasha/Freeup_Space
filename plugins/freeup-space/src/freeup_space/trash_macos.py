@@ -16,7 +16,8 @@ def move_to_trash(path: Path, platform: str) -> bool:
             str(path).replace('"', '\\"')
         )
     )
-    subprocess.run(["osascript", "-e", script], check=True)
+    # Finder prints an alias on success; keep it out of the CLI JSON receipt.
+    subprocess.run(["osascript", "-e", script], check=True, stdout=subprocess.DEVNULL)
     return True
 
 

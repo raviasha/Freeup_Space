@@ -226,3 +226,22 @@ def test_stdio_uses_utf8_even_with_legacy_console_encoding(tmp_path):
     responses = [json.loads(line)["result"] for line in result.stdout.splitlines()]
     assert "◫" in responses[0]["contents"][0]["text"]
     assert responses[1]["_meta"]["widget"]["status"] == "choose-mode"
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="Finder adapter is macOS-only")
+def test_finder_output_does_not_corrupt_cleanup_receipt(scanned, tmp_path, monkeypatch):
+    service, session, files = scanned
+    commands = tmp_path / "fake-bin"
+    commands.mkdir()
+    finder = commands / "osascript"
+    finder.write_text("#!/bin/sh\nprintf '%s\\n' 'alias Macintosh HD:Users:test:.Trash:archive.zip'\n")
+    finder.chmod(0o755)
+    monkeypatch.setenv("PATH", str(commands) + os.pathsep + os.environ["PATH"])
+    p = preview(service, session)
+    service.confirm(session, p["token"])
+    finished(session)
+    assert session["status"] == "done", session["error"]
+    assert len(session["receipt"]["moved"]) == 1
+    assert not session["receipt"]["failed"]
+    # Our Finder executable only prints a response; no files are actually moved.
+    assert len(list(files.iterdir())) == 3
