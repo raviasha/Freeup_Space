@@ -110,8 +110,12 @@ Artifacts live in `.freeup-space/runs/<run-id>/`:
 - `receipt.json`: results of an approved action.
 - AI mode only: `investigation.json` and, after Codex investigates, `ai-notes.json`.
 
-`--summary-only` keeps command output bounded and returns the report path.
-`report --run-id <id> --full --summary-only` expands the saved report; it does not scan further.
+Large artifacts are compressed as `.json.gz` or `.md.gz`; existing plain artifacts
+remain readable. `status.json` records lightweight completion and coverage details.
+`--summary-only` keeps command output bounded. Widget deep scans defer Markdown
+export and return `report_deferred: true`; ordinary CLI scans still write a report.
+`report --run-id <id> --full --summary-only` generates the full report on demand
+without scanning further.
 
 Partial coverage is explicit: successfully inventoried files can be reviewed while errors
 and exclusions are reported. Analysis completion does not imply complete disk coverage.
@@ -142,10 +146,12 @@ The [AI workflow](skills/freeing-up-space/references/ai-investigation.md) define
 
 ## Coverage and limits
 
-Deep publishes an inventory-complete checkpoint before duplicate hashing, so early
-cache, temporary, log, download, developer-artifact and old-file candidates can be
-reviewed while exact duplicates are still being confirmed. Duplicate hashing uses a
-Pareto-prioritized folder pass: it targets roughly 80% of eligible bytes from roughly
+Deep saves an inventory checkpoint before analysis, classifies each file once, and
+builds one final cleanup plan. The widget shows separate progress for categorizing,
+duplicate checks, preparing results and saving; inventory totals remain visible.
+Cleanup review becomes available when that final plan is ready.
+Duplicate selection excludes empty files, repeated hard links and unique file sizes
+before applying a Pareto-prioritized folder pass: it targets roughly 80% of eligible bytes from roughly
 the top 20% of folders first, subject to 10,000 files, 1 GiB and 120-second content-analysis
 budgets. If the time budget expires, Deep produces a reviewable plan without duplicate
 candidates and labels duplicate coverage incomplete in `run.json`; it never leaves the run
