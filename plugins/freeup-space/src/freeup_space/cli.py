@@ -19,7 +19,7 @@ from typing import Optional, Sequence
 from .apply import apply_selection
 from .categories import classify
 from .models import ActionType, CandidateSnapshot, DuplicateGroup, Evidence, FileRecord, Risk, ScanError, ScanRun
-from .old_files import find_old_files
+from .old_files import find_old_files, old_file_evidence, _months_before
 from .plans import PlanError, build_permanent_plan, build_plan
 from .permanent_delete import ApprovalError, permanently_delete
 from .policy import Policy
@@ -27,9 +27,12 @@ from .reports import (
     QUICK_CATEGORIES,
     quick_candidates,
     render_markdown,
+    iter_markdown,
     render_quick_markdown,
 )
 from .scanner import scan_paths
+from .json_stream import atomic_json, atomic_text, artifact_path, load_json, open_artifact
+from .widget_progress import StageProgress
 
 
 RUNS_DIR = Path(".freeup-space/runs")
@@ -53,19 +56,19 @@ def _run_dir(run_id: str) -> Path:
 
 
 def _run_path(run_id: str) -> Path:
-    return _run_dir(run_id) / "run.json"
+    return artifact_path(_run_dir(run_id) / "run.json")
 
 
 def _plan_path(run_id: str) -> Path:
-    return _run_dir(run_id) / "plan.json"
+    return artifact_path(_run_dir(run_id) / "plan.json")
 
 
 def _report_path(run_id: str) -> Path:
-    return _run_dir(run_id) / "report.md"
+    return artifact_path(_run_dir(run_id) / "report.md")
 
 
 def _receipt_path(run_id: str) -> Path:
-    return _run_dir(run_id) / "receipt.json"
+    return artifact_path(_run_dir(run_id) / "receipt.json")
 
 
 def _default_run_id() -> str:
@@ -79,11 +82,9 @@ def _json_dump(value: object) -> str:
 
 def _load_json(path: Path) -> dict:
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except FileNotFoundError as error:
-        raise RunArtifactError("missing run artifact: {}".format(path)) from error
-    except json.JSONDecodeError as error:
-        raise RunArtifactError("corrupt run artifact: {}".format(path)) from error
+        return load_json(path)
+    except ValueError as error:
+        raise RunArtifactError(str(error)) from error
 
 
 def _encode_run(run: ScanRun) -> dict:
@@ -158,44 +159,75 @@ def _decode_run(data: dict) -> ScanRun:
 
 
 def _store_run(run: ScanRun) -> None:
-    _atomic_write(_run_path(run.run_id), _json_dump(_encode_run(run)))
+    phase = "Saving analysis" if run.complete else "Saving inventory"
+    atomic_json(_run_path(run.run_id), run, StageProgress(phase, unit="bytes"))
+    atomic_json(_run_dir(run.run_id) / "status.json",
+                {"run_id": run.run_id, "complete": run.complete, "mode": run.mode,
+                 "coverage": run.coverage})
 
 
 def _store_plan(plan) -> None:
-    _atomic_write(_plan_path(plan.run_id), _json_dump(plan.to_dict()))
+    atomic_json(_plan_path(plan.run_id), plan, StageProgress("Saving results", unit="bytes"))
 
 
 def _store_report(run_id: str, report: str) -> None:
-    _atomic_write(_report_path(run_id), report)
+    atomic_text(_report_path(run_id), (report,))
+
+
+def _store_deep_report(run, plan):
+    from .deep import coverage_markdown
+    from itertools import chain
+    atomic_text(_report_path(run.run_id), chain((coverage_markdown(run),), iter_markdown(plan)),
+                StageProgress("Writing report", unit="bytes"))
 
 
 def _store_receipt(run_id: str, receipt) -> None:
-    _atomic_write(_receipt_path(run_id), _json_dump(receipt.to_dict()))
+    atomic_json(_receipt_path(run_id), receipt)
 
 
 def _load_run(run_id: str) -> ScanRun:
     return _decode_run(_load_json(_run_path(run_id)))
 
 
-def _collect_evidence(run: ScanRun, policy: Policy) -> tuple[Evidence, ...]:
-    evidence = list(
-        find_old_files(
-            tuple(record for record in run.files if record.file_kind == "regular"),
-            run.completed_at or run.started_at,
-            policy=policy,
-        )
-    )
-    established = {item.path for item in evidence}
-    established.update(path for group in run.duplicate_groups for path in group.duplicate_paths)
+def _collect_evidence(run: ScanRun, policy: Policy, duplicate_records=None) -> tuple[Evidence, ...]:
+    # Old-file evidence uses the lexically first path for a physical file.
+    age_records = {}
     for record in run.files:
-        evidence.extend(item for item in classify(record, policy)
-                        if item.rule != "unclassified" or record.path not in established)
+        if record.file_kind == "regular":
+            key = (record.st_dev, record.st_ino)
+            prior = age_records.get(key)
+            if prior is None or str(record.path) < str(prior.path):
+                age_records[key] = record
+    now = run.completed_at or run.started_at
+    threshold = _months_before(now, 12)
+    duplicate_paths = {path for group in run.duplicate_groups for path in group.duplicate_paths}
+    evidence = []
+    progress = StageProgress("Categorizing files", len(run.files))
+    for index, record in enumerate(run.files, 1):
+        findings = classify(record, policy)
+        old = None
+        if age_records.get((record.st_dev, record.st_ino)) is record:
+            old = old_file_evidence(record, now, threshold, 12, policy, findings)
+        if old is not None:
+            evidence.append(old)
+        evidence.extend(item for item in findings
+                        if item.rule != "unclassified" or (old is None and record.path not in duplicate_paths))
+        if duplicate_records is not None and record.file_kind == "regular" and all(
+                item.actionable or item.rule == "unclassified" for item in findings):
+            duplicate_records.append(record)
+        progress.update(index)
+    progress.finish()
     return tuple(evidence)
 
 
-def _build_plan(run: ScanRun, platform: str, permanent: bool = False):
+def _build_plan(run: ScanRun, platform: str, permanent: bool = False, evidence=None):
     policy = Policy.for_platform(platform)
-    evidence = _collect_evidence(run, policy)
+    if evidence is None:
+        evidence = _collect_evidence(run, policy)
+    else:
+        duplicate_paths = {path for group in run.duplicate_groups for path in group.duplicate_paths}
+        evidence = tuple(item for item in evidence
+                         if item.rule != "unclassified" or item.path not in duplicate_paths)
     if permanent:
         return build_permanent_plan(run, evidence, policy)
     return build_plan(run, evidence, policy, action=ActionType.TRASH)
@@ -219,11 +251,11 @@ def cmd_report(args: argparse.Namespace) -> int:
     full = getattr(args, "full", False) or run.mode in {"deep", "deep-ai"}
     limit = getattr(args, "limit", 10)
     summary_only = getattr(args, "summary_only", False)
-    report = render_markdown(plan) if full else render_quick_markdown(plan, limit)
     if run.mode in {"deep", "deep-ai"}:
-        from .deep import coverage_markdown
-        report = coverage_markdown(run) + report
-    _store_report(run.run_id, report)
+        _store_deep_report(run, plan)
+    else:
+        report = render_markdown(plan) if full else render_quick_markdown(plan, limit)
+        _store_report(run.run_id, report)
     if summary_only:
         actionable = tuple(
             item
@@ -258,7 +290,9 @@ def cmd_report(args: argparse.Namespace) -> int:
             end="",
         )
     else:
-        sys.stdout.write(report)
+        with open_artifact(_report_path(run.run_id)) as stream:
+            import shutil
+            shutil.copyfileobj(stream, sys.stdout)
     return 0
 
 
@@ -563,48 +597,23 @@ def cmd_start(args: argparse.Namespace) -> int:
             raise RunArtifactError("one or more scan roots do not exist")
         run = inventory(paths, args.platform, run_id, args.mode)
         _store_run(run)  # Resume can reuse this inventory if hashing is interrupted.
+    if not run.complete and args.summary_only:
+        event = {"event": "inventory-saved", "run_id": run.run_id,
+                 "message": "Inventory saved; preparing cleanup findings."}
+        prefix = "FREEUP_EVENT " if os.environ.get("FREEUP_WIDGET_PROGRESS") == "1" else ""
+        print(prefix + json.dumps(event), file=sys.stderr, flush=True)
+    eligible = []
+    evidence = _collect_evidence(run, Policy.for_platform(run.platform), eligible)
     if not run.complete:
-        # Publish a safe inventory checkpoint before the expensive duplicate pass.
-        # Applying is rejected while analysis_pending is set.
-        preliminary_run = replace(
-            run,
-            complete=True,
-            coverage=dict(run.coverage, analysis_pending=True,
-                           analysis_stage="inventory-complete",
-                           duplicates="pending"),
-        )
-        preliminary_plan = _build_plan(preliminary_run, preliminary_run.platform)
-        _store_plan(preliminary_plan)
-        _store_report(
-            preliminary_run.run_id,
-            coverage_markdown(preliminary_run) + render_markdown(preliminary_plan),
-        )
-        if args.summary_only:
-            provisional = tuple(
-                c for c in preliminary_plan.candidates
-                if c.actionable and c.risk is not Risk.REPORT_ONLY
-            )
-            print(_json_dump({
-                "event": "partial-results",
-                "run_id": preliminary_run.run_id,
-                "mode": preliminary_run.mode,
-                "status": "inventory-complete-analysis-pending",
-                "report_path": str(_report_path(preliminary_run.run_id).resolve()),
-                "candidate_count": len(provisional),
-                "duplicates": "pending",
-                "message": "Initial candidates are ready for review; exact duplicate analysis is still running.",
-                "candidates": [
-                    {"candidate_id": c.candidate_id, "path": str(c.path),
-                     "category": c.category, "risk": c.risk.value,
-                     "reclaimable_bytes": c.reclaimable_bytes}
-                    for c in provisional[:args.limit]
-                ],
-            }), file=sys.stderr, flush=True)
-        run = analyze(run)
+        run = analyze(run, eligible=eligible)
         _store_run(run)
-    plan = _build_plan(run, run.platform)
+    del eligible
+    plan = _build_plan(run, run.platform, evidence=evidence)
+    del evidence
     _store_plan(plan)
-    _store_report(run.run_id, coverage_markdown(run) + render_markdown(plan))
+    report_deferred = args.summary_only and os.environ.get("FREEUP_WIDGET_PROGRESS") == "1"
+    if not report_deferred:
+        _store_deep_report(run, plan)
     actionable = tuple(c for c in plan.candidates if c.actionable and c.risk is not Risk.REPORT_ONLY)
     categories = {}
     for candidate in plan.candidates:
@@ -613,7 +622,8 @@ def cmd_start(args: argparse.Namespace) -> int:
         group["actionable_bytes"] += candidate.reclaimable_bytes
     payload = {"run_id": run.run_id, "mode": run.mode, "mode_name": MODE_NAMES[run.mode],
                "status": "ready-for-review", "plan_digest": plan.digest,
-               "report_path": str(_report_path(run.run_id).resolve()),
+               "report_path": None if report_deferred else str(_report_path(run.run_id).resolve()),
+               "report_deferred": report_deferred,
                "candidate_count": len(plan.candidates), "actionable_count": len(actionable),
                "reclaimable_bytes": sum(c.reclaimable_bytes for c in actionable),
                "categories": categories, "coverage": {k: v for k, v in run.coverage.items()
@@ -636,7 +646,9 @@ def cmd_start(args: argparse.Namespace) -> int:
     if args.summary_only:
         print(_json_dump(payload), end="")
     else:
-        print(_report_path(run.run_id).read_text(encoding="utf-8"))
+        with open_artifact(_report_path(run.run_id)) as report:
+            import shutil
+            shutil.copyfileobj(report, sys.stdout)
         if run.mode == "deep-ai":
             print("AI investigation pending in Codex; metadata packet: " + payload["ai_investigation"]["packet_path"])
     return 0

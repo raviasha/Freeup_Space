@@ -25,6 +25,7 @@ from .models import (
 )
 from .policy import Policy
 from .path_utils import normalize_path
+from .widget_progress import StageProgress
 
 
 SCHEMA_VERSION = "1"
@@ -166,16 +167,15 @@ def _candidate_sort_key(candidate: Candidate):
 
 
 def _digest(plan: CleanupPlan) -> str:
-    payload = plan.to_dict()
-    payload["digest"] = ""
-    encoded = json.dumps(
-        payload,
-        ensure_ascii=False,
-        allow_nan=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
+    from .json_stream import canonical_chunks
+    digest = hashlib.sha256()
+    progress = StageProgress("Signing results", unit="bytes")
+    for chunk in canonical_chunks(replace(plan, digest="")):
+        data = chunk.encode("utf-8")
+        digest.update(data)
+        progress.advance(len(data))
+    progress.finish()
+    return digest.hexdigest()
 
 
 def build_plan(
@@ -199,7 +199,10 @@ def build_plan(
         if isinstance(record, FileRecord)
     }
     duplicate_findings = _duplicate_evidence(run, records)
-    reconciled = reconcile_evidence(tuple(evidence) + duplicate_findings, policy)
+    combined = tuple(evidence) + duplicate_findings
+    progress = StageProgress("Combining findings", len(combined), "findings")
+    reconciled = reconcile_evidence(combined, policy, progress=progress)
+    del combined
     duplicate_by_path = {
         _normalized_path(path, run.platform): group
         for group in run.duplicate_groups
@@ -207,7 +210,8 @@ def build_plan(
     }
 
     candidates = []
-    for finding in reconciled:
+    progress = StageProgress("Preparing results", len(reconciled), "items")
+    for index, finding in enumerate(reconciled, 1):
         key = _normalized_path(finding.path, run.platform)
         record = records.get(key)
         if record is None:
@@ -264,6 +268,9 @@ def build_plan(
             )
         )
 
+        progress.update(index)
+    progress.finish()
+    StageProgress("Ordering results", unit="items")
     ordered = sorted(candidates, key=_candidate_sort_key)
     counters = defaultdict(int)
     identified = []

@@ -11,6 +11,7 @@ from pathlib import Path
 
 from .investigation import validate_notes
 from .runtime import child_options, cli_command, plugin_root
+from .json_stream import artifact_path, load_json
 
 ROOT = plugin_root()
 BUSY = {"scanning", "previewing", "moving"}
@@ -50,22 +51,36 @@ class WidgetService:
             raise ValueError("Invalid search")
         plan = session["plan"] or {}
         candidates = plan.get("candidates", [])
-        actionable = [c for c in candidates if self.actionable(c)]
-        visible = [c for c in candidates if (not category or c["category"] == category) and query.casefold() in
-                   (c["path"] + " " + c["category"] + " " + c["candidate_id"]).casefold()]
-        groups = {}
-        for c in candidates:
-            group = groups.setdefault(c["category"], dict(category=c["category"], count=0, actionable_count=0, bytes=0))
-            group["count"] += 1
-            if self.actionable(c):
-                group["actionable_count"] += 1
-                group["bytes"] += c["reclaimable_bytes"]
+        cached = session.get("view_index")
+        if cached is None or cached["plan"] is not plan or cached["digest"] != plan.get("digest"):
+            groups, by_category = {}, {}
+            count = total = 0
+            for c in candidates:
+                group = groups.setdefault(c["category"], dict(category=c["category"], count=0, actionable_count=0, bytes=0))
+                by_category.setdefault(c["category"], []).append(c)
+                group["count"] += 1
+                if self.actionable(c):
+                    group["actionable_count"] += 1
+                    group["bytes"] += c["reclaimable_bytes"]
+                    count += 1
+                    total += c["reclaimable_bytes"]
+            cached = dict(plan=plan, digest=plan.get("digest"), by_category=by_category,
+                          groups=sorted(groups.values(), key=lambda g: (-g["bytes"], g["category"])),
+                          actionable_count=count, reclaimable_bytes=total, filter_key=None)
+            session["view_index"] = cached
+        key = (category, query.casefold())
+        if cached["filter_key"] != key:
+            source = cached["by_category"].get(category, []) if category else candidates
+            cached["visible"] = [c for c in source if key[1] in
+                (c["path"] + " " + c["category"] + " " + c["candidate_id"]).casefold()] if query else source
+            cached["filter_key"] = key
+        visible = cached["visible"]
         result = {k: session[k] for k in ("session_id", "key", "status", "mode", "run_id",
                   "progress", "started_at", "preview", "receipt", "error", "ai_status", "ai_notes")}
         result.update(plan_digest=plan.get("digest"), candidates=[self.candidate(c) for c in visible[offset:offset+50]],
-                      offset=offset, query=query, category=category, categories=sorted(groups.values(), key=lambda g: (-g["bytes"], g["category"])),
+                      offset=offset, query=query, category=category, categories=cached["groups"],
                       filtered_count=len(visible), candidate_count=len(candidates),
-                      actionable_count=len(actionable), reclaimable_bytes=sum(c["reclaimable_bytes"] for c in actionable),
+                      actionable_count=cached["actionable_count"], reclaimable_bytes=cached["reclaimable_bytes"],
                       coverage=session.get("coverage", {}), ai_finding_count=session.get("ai_finding_count", 0))
         return result
 
@@ -84,7 +99,11 @@ class WidgetService:
         return Path(session["workspace"]) / ".freeup-space" / "runs" / session["run_id"]
 
     def load(self, session, filename):
-        return json.loads((self.directory(session) / filename).read_text(encoding="utf-8"))
+        return load_json(self.directory(session) / filename)
+
+    def run_status(self, session):
+        filename = "status.json" if artifact_path(self.directory(session) / "status.json").exists() else "run.json"
+        return self.load(session, filename)
 
     def command(self, session, args, progress=False):
         options = child_options()
@@ -98,7 +117,24 @@ class WidgetService:
 
         def stderr_reader():
             for line in process.stderr:
-                if line.startswith("FREEUP_PROGRESS "):
+                if line.startswith("FREEUP_STAGE "):
+                    try:
+                        update = json.loads(line[len("FREEUP_STAGE "):])
+                        with self.lock:
+                            session["progress"] = dict(session["progress"], **update)
+                            session["progress"].pop("current_path", None)
+                            session["progress"].pop("message", None)
+                    except (ValueError, TypeError):
+                        pass
+                elif line.startswith("FREEUP_EVENT "):
+                    try:
+                        event = json.loads(line[len("FREEUP_EVENT "):])
+                        if event.get("event") in {"inventory-saved", "partial-results"} and event.get("run_id") == session["run_id"]:
+                            with self.lock:
+                                session["can_resume"] = True
+                    except (ValueError, TypeError):
+                        pass
+                elif line.startswith("FREEUP_PROGRESS "):
                     try:
                         update = json.loads(line[len("FREEUP_PROGRESS "):])
                         with self.lock:
@@ -153,13 +189,16 @@ class WidgetService:
             session["requests"].add(request_id)
             session.update(status="scanning", mode=mode, run_id="widget-" + secrets.token_hex(12),
                            progress={"phase": "Starting scan"}, started_at=time.time(), preview=None,
-                           receipt=None, plan=None, error=None, ai_status=None, ai_notes=None,
+                           receipt=None, plan=None, view_index=None, error=None, ai_status=None, ai_notes=None,
                            ai_requested=False, coverage={}, ai_finding_count=0)
 
             def scan():
                 summary = self.command(session, ["start", "--mode", mode, "--run-id", session["run_id"],
                                                 "--summary-only", "--", *paths], progress=True)
-                run = self.load(session, "run.json")
+                with self.lock:
+                    session["progress"] = dict(session["progress"], phase="Loading results",
+                        processed=0, total=None, unit="items", phase_started_at=time.time(), updated_at=time.time())
+                run = self.run_status(session)
                 plan = self.load(session, "plan.json")
                 if not run.get("complete") or run.get("coverage", {}).get("analysis_pending"):
                     raise ValueError("Scan analysis has not completed")

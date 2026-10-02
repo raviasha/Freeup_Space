@@ -66,14 +66,18 @@ substituting agent-written scan commands. The runner with no arguments displays 
 
 For Quick and Deep, relay the CLI results: do not independently enumerate files, classify
 them using AI, or use shell searches to invent extra cleanup candidates. Deep emits an
-inventory-complete `partial-results` event before exact-duplicate hashing, then emits the
-final result; treat the first event as provisional because duplicate coverage is pending.
+`inventory-saved` event before classification and exact-duplicate hashing, then emits
+the final result. This checkpoint confirms resume is available; it contains no
+cleanup plan and is not a completed analysis.
 Poll an existing long-running process for completion rather than launching duplicate scans.
-Summaries are bounded; the complete checkbox report is saved at `report_path`. Show/open that report
-for detailed review without loading the whole inventory into the conversation.
+Summaries are bounded; ordinary CLI scans save the complete report at `report_path`.
+Widget scans may return `report_deferred: true` and `report_path: null`; generate an
+explicit report with `report --run-id <id> --full --summary-only` only when requested.
+Show/open that report for detailed review without loading the whole inventory into the conversation.
 
 Explain returned coverage, including errors, excluded paths, exhausted Quick budgets, and
-Deep's Pareto-prioritized duplicate scope. Deep hashes the highest-value folders first,
+Deep's Pareto-prioritized duplicate scope. Empty files, hard-link aliases and unique
+file sizes are excluded before budgeting. Deep hashes the highest-value folders first,
 targeting roughly 80% of eligible bytes from roughly the top 20% of folders, within hard
 file, byte and time budgets. If its duplicate time budget expires, Deep finalizes a safe
 non-duplicate plan and reports incomplete duplicate coverage rather than leaving the run

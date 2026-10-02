@@ -48,52 +48,57 @@ def find_old_files(
 
     findings = []
     for record in records.values():
-        if record.size < MIN_OLD_FILE_SIZE:
-            continue
-        if now.tzinfo is None:
-            modified = datetime.fromtimestamp(record.mtime)
-        else:
-            modified = datetime.fromtimestamp(record.mtime, tz=now.tzinfo)
-        if modified > threshold:
-            continue
-        record_policy = policy or _default_policy(record)
-        category_rule = record_policy.category_rules["old-file"]
-        provisional = Evidence(
-            path=record.path,
-            category="old-file",
-            rule="old-file-{}-months".format(months),
-            reason="not modified for at least {} months".format(months),
-            risk=category_rule.risk,
-            actionable=category_rule.actionable,
-            size=record.size,
-        )
-        context = [
-            item
-            for item in classify(record, record_policy)
-            if item.rule != "unclassified"
-        ]
-        reconciled = reconcile_evidence(
-            [provisional] + context, record_policy
-        )[0]
-        risk = reconciled.risk
-        actionable = reconciled.actionable
-        findings.append(
-            Evidence(
-                path=record.path,
-                category="old-file",
-                rule="old-file-{}-months".format(months),
-                reason="not modified for at least {} months".format(months),
-                risk=risk,
-                actionable=actionable,
-                size=record.size,
-                details={
-                    "modified_at": modified,
-                    "threshold_at": threshold,
-                    "threshold_months": months,
-                    "minimum_size": MIN_OLD_FILE_SIZE,
-                    "rule_risk": category_rule.risk.value,
-                },
-            )
-        )
+        item = old_file_evidence(record, now, threshold, months, policy)
+        if item is not None:
+            findings.append(item)
     findings.sort(key=lambda item: (-item.size, str(item.path)))
     return findings
+
+
+def old_file_evidence(record, now, threshold, months, policy, classified=None):
+    """Evaluate age using already classified evidence when available."""
+    if record.size < MIN_OLD_FILE_SIZE:
+        return None
+    if now.tzinfo is None:
+        modified = datetime.fromtimestamp(record.mtime)
+    else:
+        modified = datetime.fromtimestamp(record.mtime, tz=now.tzinfo)
+    if modified > threshold:
+        return None
+    record_policy = policy or _default_policy(record)
+    category_rule = record_policy.category_rules["old-file"]
+    provisional = Evidence(
+        path=record.path,
+        category="old-file",
+        rule="old-file-{}-months".format(months),
+        reason="not modified for at least {} months".format(months),
+        risk=category_rule.risk,
+        actionable=category_rule.actionable,
+        size=record.size,
+    )
+    context = [
+        item
+        for item in (classified if classified is not None else classify(record, record_policy))
+        if item.rule != "unclassified"
+    ]
+    reconciled = reconcile_evidence(
+        [provisional] + context, record_policy
+    )[0]
+    risk = reconciled.risk
+    actionable = reconciled.actionable
+    return Evidence(
+        path=record.path,
+        category="old-file",
+        rule="old-file-{}-months".format(months),
+        reason="not modified for at least {} months".format(months),
+        risk=risk,
+        actionable=actionable,
+        size=record.size,
+        details={
+            "modified_at": modified,
+            "threshold_at": threshold,
+            "threshold_months": months,
+            "minimum_size": MIN_OLD_FILE_SIZE,
+            "rule_risk": category_rule.risk.value,
+        },
+    )

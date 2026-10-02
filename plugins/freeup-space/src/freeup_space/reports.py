@@ -112,8 +112,8 @@ def _details(
     return lines
 
 
-def render_markdown(plan: CleanupPlan) -> str:
-    """Render a stable review report without ever preselecting a candidate."""
+def iter_markdown(plan: CleanupPlan):
+    """Stream report lines without retaining the full report in memory."""
 
     actionable = tuple(
         item
@@ -138,47 +138,51 @@ def render_markdown(plan: CleanupPlan) -> str:
         "Report-only findings cannot be selected for cleanup.",
         "",
     ]
+    yield from (line + "\n" for line in lines)
     if report_only:
         for candidate in report_only:
-            lines.append(
+            yield (
                 "- {} — {} — {} — {}".format(
                     candidate.candidate_id,
                     _bytes(candidate.snapshot.size),
                     candidate.risk.value.title(),
                     candidate.category,
-                )
+                ) + "\n"
             )
-            lines.extend(_details(candidate, actionable=False, action=plan.action))
+            yield from (line + "\n" for line in _details(candidate, actionable=False, action=plan.action))
     else:
-        lines.append("None.")
+        yield "None.\n"
 
-    lines.extend(("", "## Actionable checklist", "",
+    yield from (line + "\n" for line in ("", "## Actionable checklist", "",
                   "Check the exact candidate IDs you approve. Reply with the checked IDs;"
                   " the assistant will preview those IDs before moving anything.", ""))
     if actionable:
         for candidate in actionable:
-            lines.append(
+            yield (
                 "- [ ] {} — {} — {} — {}".format(
                     candidate.candidate_id,
                     _bytes(candidate.reclaimable_bytes),
                     candidate.risk.value.title(),
                     candidate.category,
-                )
+                ) + "\n"
             )
-            lines.extend(_details(candidate, actionable=True, action=plan.action))
+            yield from (line + "\n" for line in _details(candidate, actionable=True, action=plan.action))
     else:
-        lines.append("No actionable candidates.")
+        yield "No actionable candidates.\n"
 
-    lines.extend(("", "## Space accounting note", ""))
+    yield "\n## Space accounting note\n\n"
     if plan.action is ActionType.TRASH:
-        lines.append(
-            "Moving items to Trash records bytes moved; it does not necessarily free space immediately. Verify observed free space separately and empty Trash manually when you are ready to reclaim it permanently."
+        yield (
+            "Moving items to Trash records bytes moved; it does not necessarily free space immediately. Verify observed free space separately and empty Trash manually when you are ready to reclaim it permanently.\n"
         )
     else:
-        lines.append(
-            "Permanent deletion is irreversible. Reclaimable totals are estimates; verify observed free space separately after the operation."
+        yield (
+            "Permanent deletion is irreversible. Reclaimable totals are estimates; verify observed free space separately after the operation.\n"
         )
-    return "\n".join(lines) + "\n"
+
+
+def render_markdown(plan: CleanupPlan) -> str:
+    return "".join(iter_markdown(plan))
 
 
 def quick_candidates(plan: CleanupPlan, limit: int = 20) -> tuple[Candidate, ...]:

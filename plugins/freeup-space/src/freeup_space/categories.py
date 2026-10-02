@@ -215,17 +215,25 @@ def classify(record: FileRecord, policy: Policy) -> List[Evidence]:
 
 
 def reconcile_evidence(
-    evidence: Iterable[Evidence], policy: Policy
+    evidence: Iterable[Evidence], policy: Policy, progress=None
 ) -> List[EvidenceCandidate]:
     """Collapse additive evidence to one policy-safe candidate per lexical path."""
 
     grouped: Dict[str, List[Evidence]] = {}
-    for item in evidence:
+    for index, item in enumerate(evidence, 1):
+        if progress:
+            progress.update(index)
         key = _normalize(str(item.path), policy.platform)
         grouped.setdefault(key, []).append(item)
 
+    if progress:
+        progress.finish()
+        from .widget_progress import StageProgress
+        progress = StageProgress("Reconciling findings", len(grouped), "items")
     candidates = []
-    for key in sorted(grouped):
+    for index, key in enumerate(sorted(grouped), 1):
+        if progress:
+            progress.update(index)
         items = sorted(grouped[key], key=lambda item: (item.rule, item.reason))
         path = min((item.path for item in items), key=str)
         sizes = {item.size for item in items}
@@ -262,4 +270,6 @@ def reconcile_evidence(
                 evidence=tuple(items),
             )
         )
+    if progress:
+        progress.finish()
     return candidates

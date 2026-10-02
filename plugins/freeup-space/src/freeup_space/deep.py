@@ -16,6 +16,7 @@ from .policy import Policy
 from .safety import is_protected
 from .scanner import scan_paths
 from .volumes import enumerate_local_volumes
+from .widget_progress import StageProgress
 
 
 MODE_NAMES = {"quick": "Quick Scan", "deep": "Deep Scan", "deep-ai": "Deep Scan + AI"}
@@ -100,6 +101,21 @@ def inventory(paths, platform, run_id, mode, progress_stream=None):
 def _select_duplicate_records(eligible):
     """Select a deterministic, bounded Pareto-prioritized duplicate scope."""
 
+    # A unique size cannot have a duplicate; aliases and empty files waste budgets.
+    by_identity = {}
+    progress = StageProgress("Selecting duplicate candidates", len(eligible))
+    for index, record in enumerate(eligible, 1):
+        if record.file_kind == "regular" and record.size > 0:
+            key = (record.st_dev, record.st_ino)
+            prior = by_identity.get(key)
+            if prior is None or str(record.path) < str(prior.path):
+                by_identity[key] = record
+        progress.update(index)
+    by_size = defaultdict(list)
+    for record in by_identity.values():
+        by_size[record.size].append(record)
+    eligible = tuple(record for group in by_size.values() if len(group) > 1 for record in group)
+    progress.finish()
     folder_records = defaultdict(list)
     for record in eligible:
         folder_records[record.path.parent].append(record)
@@ -150,26 +166,31 @@ def _select_duplicate_records(eligible):
     }
 
 
-def analyze(run, progress_stream=None, *, max_seconds=_DUPLICATE_MAX_SECONDS):
+def analyze(run, progress_stream=None, *, max_seconds=_DUPLICATE_MAX_SECONDS, eligible=None):
     progress_stream = progress_stream or sys.stderr
     policy = Policy.for_platform(run.platform)
-    eligible = []
-    for record in run.files:
-        findings = classify(record, policy)
-        # Never hash managed/cloud stores, databases, or protected data merely
-        # to find a duplicate. Unclassified regular files may be compared locally.
-        if record.file_kind == "regular" and all(
-            item.actionable or item.rule == "unclassified" for item in findings
-        ):
-            eligible.append(record)
+    if eligible is None:
+        eligible = []
+        for record in run.files:
+            findings = classify(record, policy)
+            # Never hash managed/cloud stores, databases, or protected data merely
+            # to find a duplicate. Unclassified regular files may be compared locally.
+            if record.file_kind == "regular" and all(
+                item.actionable or item.rule == "unclassified" for item in findings
+            ):
+                eligible.append(record)
     selected, selection_coverage = _select_duplicate_records(eligible)
     last_progress = [0.0]
     progress_count = [0]
     deadline = monotonic() + max_seconds
+    # Partial and full hashing can each check the same file. The number of
+    # full hashes depends on partial matches, so there is no fixed total yet.
+    stage = StageProgress("Checking duplicates", unit="checks")
 
-    def progress(_):
+    def progress(path):
         progress_count[0] += 1
-        if monotonic() - last_progress[0] >= 5:
+        stage.update(progress_count[0])
+        if os.environ.get("FREEUP_WIDGET_PROGRESS") != "1" and monotonic() - last_progress[0] >= 5:
             print(
                 "Analysis: checked {} duplicate candidates ({} selected; {:.0f}s budget)".format(
                     progress_count[0], len(selected), max_seconds
@@ -189,6 +210,7 @@ def analyze(run, progress_stream=None, *, max_seconds=_DUPLICATE_MAX_SECONDS):
             )
         )
     except DuplicateAnalysisDeadlineExceeded:
+        stage.finish()
         coverage = dict(
             run.coverage,
             **selection_coverage,
@@ -201,6 +223,7 @@ def analyze(run, progress_stream=None, *, max_seconds=_DUPLICATE_MAX_SECONDS):
         )
         return replace(run, complete=True, duplicate_groups=(), coverage=coverage)
 
+    stage.finish()
     coverage = dict(
         run.coverage,
         **selection_coverage,

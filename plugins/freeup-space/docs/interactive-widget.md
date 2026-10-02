@@ -7,9 +7,12 @@ external network requests, remote hosting, or API key.
 Open the widget in a new Codex task after installing the updated plugin. The flow is:
 
 1. Choose Quick Scan, Deep Scan, or Deep Scan + AI; optionally set specific folders.
-2. Watch real inventory counters, elapsed time and duplicate-analysis progress.
-   There is no estimated percentage when the total work is unknown. Cancel is
-   available while scanning; partial results cannot be applied.
+2. Watch inventory counters, then a separate count for categorizing files,
+   checking duplicates, preparing results and saving. Each stage shows its own
+   elapsed time; inventory totals remain as a completed summary. Known totals
+   use a progress bar. Unknown totals stay indeterminate, and a delayed update
+   is reported as the time since the last real progress event. Cancel is available
+   while scanning; an inventory checkpoint cannot be applied as a cleanup plan.
 3. Expand categories to see each file or aggregate cache folder, path, size, risk,
    reasons and retained duplicate copy. Report-only findings are disabled. Search
    and paging support large reports. Selections persist across categories/pages;
@@ -45,6 +48,14 @@ Each scan runs in an isolated subprocess using the existing engine and task
 workspace. Background jobs allow progress polling while the host remains responsive.
 Multiple widgets can operate without changing the server working directory.
 The CLI saves the scan, plan and receipt under `.freeup-space/runs` in that workspace.
+Deep scans classify each record once and reuse that evidence for duplicate
+eligibility and the final plan. The inventory checkpoint is saved before analysis;
+no preliminary full plan is built. Widget scans defer the full Markdown report:
+generate it explicitly with `report --run-id RUN_ID --full --summary-only` from
+the same workspace. Ordinary CLI scans still produce their report automatically.
+Large artifacts are streamed to compressed files; plain files from older versions
+remain readable. Category totals and the current search page are cached for each
+immutable plan, so polling does not recalculate them over the full inventory.
 When the host remounts the widget (for example, after switching windows), it uses
 the original private session credentials to fetch current server state before
 enabling controls. Returning to a visible widget also refreshes live status. A
