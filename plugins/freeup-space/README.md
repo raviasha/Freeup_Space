@@ -19,6 +19,16 @@ Fixed rules give repeatable decisions for the same inventory, policy and environ
 Live files, permissions and Quick's time budget can change results between runs.
 Choosing a mode never authorizes deletion.
 
+On macOS, confirmed cleanup downloads missing iCloud content before moving it to
+Trash, including content inside selected folders. Preparation has a two-minute
+budget per item and checks available local space. The original file snapshot is
+rechecked after preparation; changed files are skipped. Download and Trash failures
+appear in the receipt while other approved items continue, without Finder dialogs.
+Preview does not download files. Downloading temporarily uses local storage; moving
+to Trash does not necessarily free that storage immediately. Deleting iCloud files
+also deletes their synced copies. To keep the cloud copy and only reclaim local
+space, use Finder's **Remove Download** instead.
+
 ## Install with Setup (recommended)
 
 Download the [installer for Windows or Mac](https://github.com/raviasha/Freeup_Space/releases/latest),

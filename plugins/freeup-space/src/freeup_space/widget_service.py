@@ -12,37 +12,208 @@ from pathlib import Path
 from .investigation import validate_notes
 from .runtime import child_options, cli_command, plugin_root
 from .json_stream import artifact_path, load_json
+from .widget_store import WidgetStore, valid_run_id, workspace_key
 
 ROOT = plugin_root()
-BUSY = {"scanning", "previewing", "moving"}
+BUSY = {"scanning", "loading", "previewing", "moving"}
 
 
 class WidgetService:
     def __init__(self):
         self.sessions = {}
         self.lock = threading.RLock()
+        self.store = WidgetStore()
 
-    def open(self, workspace):
+    def open(self, workspace, run_id=None):
         directory = Path(workspace)
         if not directory.is_absolute() or not directory.is_dir():
             raise ValueError("Workspace must be an existing absolute directory")
         with self.lock:
+            workspace = str(directory.resolve())
+            if run_id is not None:
+                self.saved_directory(workspace, run_id)
+            try:
+                identifier = self.store.latest(workspace)
+            except (ValueError, OSError):
+                identifier = None  # Saved scan artifacts can outlive recovery metadata.
+            if identifier:
+                try:
+                    session = self.session(identifier)
+                except (ValueError, OSError):
+                    session = None
+                if session is not None and session["workspace"] == workspace:
+                    session["closed"] = False
+                    if run_id is not None and run_id != session.get("run_id"):
+                        return self.open_saved(session, run_id)
+                    self.store.save(session)
+                    return self.view(session)
             identifier = secrets.token_hex(16)
             session = dict(session_id=identifier, key=secrets.token_urlsafe(32),
                            workspace=str(directory.resolve()), status="choose-mode", mode=None,
                            run_id=None, progress={}, started_at=None, preview=None,
                            receipt=None, error=None, process=None, requests=set(), plan=None,
-                           ai_status=None, ai_notes=None, ai_requested=False)
+                           ai_status=None, ai_notes=None, ai_requested=False,
+                           closed=False, review_state={}, selected_candidates=[], saved_scans=[])
             self.sessions[identifier] = session
+            session["saved_scans"] = self.saved_scans(workspace)
+            chosen = run_id or (session["saved_scans"][0]["run_id"] if session["saved_scans"] else None)
+            if chosen:
+                return self.open_saved(session, chosen)
+            self.store.save(session)
             return self.view(session)
 
     def session(self, session_id, key=None):
-        session = self.sessions.get(session_id)
-        if session is None:
-            raise ValueError("Widget session expired. Open Freeup Space again.")
-        if key is not None and not secrets.compare_digest(session["key"], key):
-            raise ValueError("Invalid widget session key")
-        return session
+        with self.lock:
+            session = self.sessions.get(session_id)
+            if session is None:
+                saved = self.store.load(session_id)
+                if saved is None:
+                    raise ValueError("Widget session expired. Open Freeup Space again.")
+                if key is not None and not secrets.compare_digest(saved["key"], key):
+                    raise ValueError("Invalid widget session key")
+                session = dict(saved, process=None, requests=set(), plan=None, view_index=None,
+                               progress={}, preview=None, error=None, ai_status=None, ai_notes=None,
+                               ai_requested=False, selected_candidates=[], saved_scans=[])
+                self.sessions[session_id] = session
+                session["saved_scans"] = self.saved_scans(session["workspace"])
+                if saved.get("run_id"):
+                    try:
+                        self._restore(session, saved["run_id"], saved)
+                    except (ValueError, OSError) as error:
+                        session.update(status="error", error=str(error))
+                else:
+                    session["status"] = "choose-mode"
+            if key is not None and not secrets.compare_digest(session["key"], key):
+                raise ValueError("Invalid widget session key")
+            return session
+
+    def saved_directory(self, workspace, run_id):
+        valid_run_id(run_id)
+        for root in self.store.run_roots(workspace):
+            directory = root / run_id
+            if directory.is_dir() and not directory.is_symlink():
+                return directory
+        raise ValueError("Saved scan is unavailable in this workspace")
+
+    def saved_scans(self, workspace):
+        results = {}
+        for root in self.store.run_roots(workspace):
+            if not root.is_dir():
+                continue
+            for directory in root.iterdir():
+                try:
+                    valid_run_id(directory.name)
+                    if not directory.is_dir() or directory.is_symlink():
+                        continue
+                    status_path = artifact_path(directory / "status.json")
+                    # Do not deserialize a multi-gigabyte inventory for a menu.
+                    if not status_path.exists():
+                        continue
+                    saved = load_json(status_path)
+                    if (saved.get("complete") and not saved.get("coverage", {}).get("analysis_pending")
+                            and artifact_path(directory / "plan.json").exists()):
+                        results.setdefault(directory.name, {"run_id": directory.name,
+                            "mode": saved.get("mode", "scan"), "saved_at": status_path.stat().st_mtime})
+                except (ValueError, OSError):
+                    continue
+        return sorted(results.values(), key=lambda r: r["saved_at"], reverse=True)
+
+    def _restore(self, session, run_id, saved=None):
+        directory = self.saved_directory(session["workspace"], run_id)
+        session.update(run_id=run_id, artifact_workspace=str(directory.parent.parent.parent),
+                       status="loading", plan=None, view_index=None, preview=None, error=None,
+                       progress={"phase": "Loading saved results"}, ai_auto_request=False, can_resume=False)
+        previous = saved or self.store.review(session["workspace"], run_id)
+
+        def load():
+            status = self.run_status(session)
+            with self.lock:
+                session.update(mode=status.get("mode"), coverage=status.get("coverage", {}))
+            if not status.get("complete") or status.get("coverage", {}).get("analysis_pending"):
+                raise ValueError("This saved scan was interrupted before analysis finished. Its inventory is preserved.")
+            plan = self.load(session, "plan.json")
+            if plan.get("run_id") != run_id or plan.get("action") != "trash":
+                raise ValueError("Saved cleanup plan does not match this scan")
+            review = previous.get("review_state") or {}
+            matches = review.get("plan_digest") == plan.get("digest")
+            if not matches:
+                review = {}
+            receipt = previous.get("receipt") if matches else None
+            wanted = set(review.get("ids", []))
+            selected = [self.candidate(c) for c in plan["candidates"]
+                        if c["candidate_id"] in wanted and self.actionable(c)]
+            review = dict(ids=[c["candidate_id"] for c in selected], plan_digest=plan["digest"],
+                          category=review.get("category", ""), query=review.get("query", ""), offset=review.get("offset", 0))
+            ai = dict(ai_status=None, ai_notes=None, ai_finding_count=0, ai_requested=False)
+            if status.get("mode") == "deep-ai":
+                try:
+                    packet = self.load(session, "investigation.json")
+                    if packet.get("run_id") != run_id or packet.get("plan_digest") != plan["digest"]:
+                        raise ValueError("Saved AI review does not match this scan")
+                    ai.update(ai_status=packet["status"], ai_finding_count=len(packet["findings"]))
+                    if artifact_path(directory / "ai-notes.json").exists():
+                        notes = self.validated_notes(packet, self.load(session, "ai-notes.json"))
+                        ai.update(ai_notes=notes, ai_status="partial" if notes["uninvestigated_count"] else "complete")
+                except (ValueError, OSError, KeyError, TypeError):
+                    ai["error"] = "Some saved AI findings could not be restored. The scan results are still available."
+            with self.lock:
+                session.update(plan=plan, mode=status.get("mode"), coverage=status.get("coverage", {}),
+                    review_state=review, selected_candidates=selected, receipt=receipt,
+                    status="done" if previous.get("status") == "done" and receipt else "review", **ai)
+                if previous.get("status") == "moving":
+                    session["error"] = "The previous cleanup was interrupted. Review the saved receipt and preview remaining files again."
+                self.store.save(session)
+        self.background(session, load)
+
+    def open_saved(self, session, run_id):
+        with self.lock:
+            if session["status"] in BUSY:
+                raise ValueError("Wait for the current operation to finish")
+            self.saved_directory(session["workspace"], run_id)
+            session.update(closed=False, review_state={}, selected_candidates=[], receipt=None,
+                           ai_status=None, ai_notes=None, ai_requested=False)
+            self._restore(session, run_id)
+            self.store.save(session)
+            return self.view(session)
+
+    def save_review(self, session, ids, plan_digest, category="", query="", offset=0):
+        with self.lock:
+            if session["status"] != "review" or not session["plan"] or session["closed"]:
+                raise ValueError("Open the scan review before saving a selection")
+            if plan_digest != session["plan"]["digest"]:
+                raise ValueError("The displayed plan is stale")
+            if (not isinstance(ids, list) or len(ids) > 500 or any(not isinstance(i, str) for i in ids)
+                    or len(set(ids)) != len(ids)):
+                raise ValueError("Choose at most 500 distinct candidate IDs")
+            if (not isinstance(query, str) or len(query) > 500 or not isinstance(category, str)
+                    or not isinstance(offset, int) or isinstance(offset, bool) or offset < 0):
+                raise ValueError("Invalid review filters")
+            self.view(session)  # Build the cached index once for this immutable plan.
+            lookup = session["view_index"]["by_id"]
+            candidates = [self.candidate(lookup[i]) for i in ids
+                          if i in lookup and self.actionable(lookup[i])]
+            if len(candidates) != len(ids):
+                raise ValueError("Selection contains unknown or report-only items")
+            session.update(review_state=dict(ids=ids, plan_digest=plan_digest, category=category, query=query, offset=offset),
+                           selected_candidates=candidates)
+            self.store.save(session)
+            return self.view(session, offset, query, category)
+
+    def dismiss(self, session):
+        with self.lock:
+            session["closed"] = True
+            if session["status"] == "preview":
+                session.update(status="review", preview=None)
+            self.store.save(session)
+            return self.view(session)
+
+    def cancel_preview(self, session):
+        with self.lock:
+            if session["status"] != "preview":
+                raise ValueError("No active preview")
+            session.update(status="review", preview=None)
+            self.store.save(session)
+            return self.view(session)
 
     def view(self, session, offset=0, query="", category=""):
         if not isinstance(offset, int) or offset < 0:
@@ -53,9 +224,10 @@ class WidgetService:
         candidates = plan.get("candidates", [])
         cached = session.get("view_index")
         if cached is None or cached["plan"] is not plan or cached["digest"] != plan.get("digest"):
-            groups, by_category = {}, {}
+            groups, by_category, by_id = {}, {}, {}
             count = total = 0
             for c in candidates:
+                by_id[c["candidate_id"]] = c
                 group = groups.setdefault(c["category"], dict(category=c["category"], count=0, actionable_count=0, bytes=0))
                 by_category.setdefault(c["category"], []).append(c)
                 group["count"] += 1
@@ -64,7 +236,7 @@ class WidgetService:
                     group["bytes"] += c["reclaimable_bytes"]
                     count += 1
                     total += c["reclaimable_bytes"]
-            cached = dict(plan=plan, digest=plan.get("digest"), by_category=by_category,
+            cached = dict(plan=plan, digest=plan.get("digest"), by_category=by_category, by_id=by_id,
                           groups=sorted(groups.values(), key=lambda g: (-g["bytes"], g["category"])),
                           actionable_count=count, reclaimable_bytes=total, filter_key=None)
             session["view_index"] = cached
@@ -82,6 +254,10 @@ class WidgetService:
                       filtered_count=len(visible), candidate_count=len(candidates),
                       actionable_count=cached["actionable_count"], reclaimable_bytes=cached["reclaimable_bytes"],
                       coverage=session.get("coverage", {}), ai_finding_count=session.get("ai_finding_count", 0))
+        result.update(can_resume=session.get("can_resume", False) and session["status"] in {"error", "cancelled"}, closed=session.get("closed", False), workspace=session["workspace"],
+                      ai_auto_request=session.get("ai_auto_request", False),
+                      review_state=session.get("review_state", {}), selected_candidates=session.get("selected_candidates", []),
+                      saved_scans=session.get("saved_scans", []))
         return result
 
     @staticmethod
@@ -96,7 +272,7 @@ class WidgetService:
                 "retained_path": candidate.get("evidence", {}).get("retained_path")}
 
     def directory(self, session):
-        return Path(session["workspace"]) / ".freeup-space" / "runs" / session["run_id"]
+        return Path(session.get("artifact_workspace", session["workspace"])) / ".freeup-space" / "runs" / session["run_id"]
 
     def load(self, session, filename):
         return load_json(self.directory(session) / filename)
@@ -108,7 +284,7 @@ class WidgetService:
     def command(self, session, args, progress=False):
         options = child_options()
         options["env"]["FREEUP_WIDGET_PROGRESS"] = "1" if progress else "0"
-        process = subprocess.Popen(cli_command(args), cwd=session["workspace"], **options)
+        process = subprocess.Popen(cli_command(args), cwd=session.get("artifact_workspace", session["workspace"]), **options)
         with self.lock:
             session["process"] = process
             if session["status"] == "cancelled":
@@ -162,6 +338,15 @@ class WidgetService:
             raise ValueError(("".join(messages).strip() or "Operation interrupted")[-3000:])
         return json.loads(output)
 
+    def update_resume(self, session):
+        if session.get("mode") in {"deep", "deep-ai"} and session.get("run_id"):
+            try:
+                saved = self.run_status(session)
+                session["can_resume"] = bool(saved.get("coverage", {}).get("inventory_finished")
+                    and (not saved.get("complete") or saved.get("coverage", {}).get("analysis_pending")))
+            except (OSError, ValueError):
+                session["can_resume"] = False
+
     def background(self, session, fn):
         def work():
             try:
@@ -169,7 +354,9 @@ class WidgetService:
             except Exception as error:
                 with self.lock:
                     if session["status"] != "cancelled":
+                        self.update_resume(session)
                         session.update(status="error", error=str(error), preview=None)
+                        self.store.save(session)
         threading.Thread(target=work, daemon=True).start()
 
     def start(self, session, mode, request_id, paths=None):
@@ -187,10 +374,15 @@ class WidgetService:
             if session["status"] in BUSY or session["process"] is not None:
                 raise ValueError("Wait for the current operation to finish")
             session["requests"].add(request_id)
+            artifact_workspace = self.store.root.parent / "widget-workspaces" / workspace_key(session["workspace"])
+            artifact_workspace.mkdir(parents=True, exist_ok=True)
+            session["artifact_workspace"] = str(artifact_workspace)
             session.update(status="scanning", mode=mode, run_id="widget-" + secrets.token_hex(12),
                            progress={"phase": "Starting scan"}, started_at=time.time(), preview=None,
                            receipt=None, plan=None, view_index=None, error=None, ai_status=None, ai_notes=None,
-                           ai_requested=False, coverage={}, ai_finding_count=0)
+                           ai_requested=False, coverage={}, ai_finding_count=0, closed=False,
+                           review_state={}, selected_candidates=[], ai_auto_request=True, can_resume=False)
+            self.store.save(session)
 
             def scan():
                 summary = self.command(session, ["start", "--mode", mode, "--run-id", session["run_id"],
@@ -206,10 +398,45 @@ class WidgetService:
                 with self.lock:
                     if session["status"] == "cancelled":
                         return
-                    session.update(status="review", plan=plan, coverage=summary.get("coverage", {}),
+                    session.update(status="review", plan=plan, coverage=summary.get("coverage", {}), can_resume=False,
                                    ai_status=packet["status"] if packet else None,
                                    ai_finding_count=len(packet["findings"]) if packet else 0)
+                    session["saved_scans"] = self.saved_scans(session["workspace"])
+                    self.store.save(session)
             self.background(session, scan)
+            return self.view(session)
+
+    def resume(self, session, request_id):
+        with self.lock:
+            if not isinstance(request_id, str) or not 8 <= len(request_id) <= 100:
+                raise ValueError("Invalid resume request")
+            if request_id in session["requests"]:
+                return self.view(session)
+            if session["status"] not in {"error", "cancelled"} or not session.get("can_resume") or session["process"]:
+                raise ValueError("Only an interrupted scan with a saved inventory can resume")
+            session["requests"].add(request_id)
+            session.update(status="scanning", preview=None, plan=None, view_index=None, error=None,
+                           started_at=time.time(), progress={"phase": "Resuming duplicate analysis"})
+
+            self.store.save(session)
+
+            def analyze():
+                summary = self.command(session, ["start", "--mode", session["mode"],
+                    "--resume", session["run_id"], "--summary-only"], progress=True)
+                run = self.run_status(session)
+                if not run.get("complete") or run.get("coverage", {}).get("analysis_pending"):
+                    raise ValueError("Scan analysis has not completed")
+                plan = self.load(session, "plan.json")
+                packet = self.load(session, "investigation.json") if session["mode"] == "deep-ai" else None
+                with self.lock:
+                    if session["status"] != "cancelled":
+                        session.update(status="review", plan=plan, can_resume=False,
+                            coverage=summary.get("coverage", {}),
+                            ai_status=packet["status"] if packet else None,
+                            ai_finding_count=len(packet["findings"]) if packet else 0)
+                        session["saved_scans"] = self.saved_scans(session["workspace"])
+                        self.store.save(session)
+            self.background(session, analyze)
             return self.view(session)
 
     def cancel(self, session):
@@ -217,12 +444,14 @@ class WidgetService:
             if session["status"] != "scanning":
                 raise ValueError("Only a scan can be cancelled")
             session["status"] = "cancelled"
+            self.update_resume(session)
+            self.store.save(session)
             if session["process"] is not None:
                 session["process"].terminate()
             return self.view(session)
 
     def check_plan(self, session):
-        run = self.load(session, "run.json")
+        run = self.run_status(session)
         plan = self.load(session, "plan.json")
         if (not run.get("complete") or run.get("coverage", {}).get("analysis_pending")
                 or plan.get("action") != "trash" or plan.get("digest") != session["plan"]["digest"]):
@@ -242,7 +471,10 @@ class WidgetService:
             if len(set(ids)) != len(ids) or any(i not in allowed for i in ids):
                 raise ValueError("Selection contains unknown, duplicate, or report-only candidate IDs")
             selected = [self.candidate(allowed[i]) for i in ids]
+            review = session.get("review_state") or {}
+            session.update(review_state=dict(review, ids=list(ids), plan_digest=plan_digest), selected_candidates=selected)
             session.update(status="previewing", preview=None, error=None)
+            self.store.save(session)
 
             def prepare():
                 receipt = self.command(session, ["apply", "--run-id", session["run_id"], "--dry-run", *ids])
@@ -266,11 +498,13 @@ class WidgetService:
                 raise ValueError("Preview expired or contains changed files. Review the selection again.")
             self.check_plan(session)
             session["status"] = "moving"
+            self.store.save(session)
 
             def move():
                 receipt = self.command(session, ["apply", "--run-id", session["run_id"], *preview["ids"]])
                 with self.lock:
                     session.update(status="done", receipt=receipt)
+                    self.store.save(session)
             self.background(session, move)
             return self.view(session)
 
@@ -288,12 +522,8 @@ class WidgetService:
                 raise ValueError("AI investigation requires a completed Deep Scan + AI")
             self.check_plan(session)
             packet = self.load(session, "investigation.json")
-            validated = validate_notes(packet, notes)
-            directories = {f["finding_id"]: f["directory"] for f in packet["findings"]}
-            for finding in validated["findings"]:
-                finding["directory"] = directories[finding["finding_id"]]
-            remaining = len(packet["findings"]) - len(validated["findings"])
-            validated["uninvestigated_count"] = remaining
+            validated = self.validated_notes(packet, notes)
+            remaining = validated["uninvestigated_count"]
             destination = self.directory(session) / "ai-notes.json"
             temporary = destination.with_suffix(".tmp")
             temporary.write_text(json.dumps(validated, ensure_ascii=False), encoding="utf-8")
@@ -301,6 +531,15 @@ class WidgetService:
             session.update(ai_status="partial" if remaining else "complete", ai_notes=validated)
             return {"session_id": session["session_id"], "status": session["ai_status"],
                     "finding_count": len(validated["findings"]), "uninvestigated_count": remaining}
+
+    @staticmethod
+    def validated_notes(packet, notes):
+        validated = validate_notes(packet, notes)
+        directories = {f["finding_id"]: f["directory"] for f in packet["findings"]}
+        for finding in validated["findings"]:
+            finding["directory"] = directories[finding["finding_id"]]
+        validated["uninvestigated_count"] = len(packet["findings"]) - len(validated["findings"])
+        return validated
 
     def close(self):
         with self.lock:

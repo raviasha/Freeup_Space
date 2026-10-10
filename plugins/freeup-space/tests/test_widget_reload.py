@@ -151,8 +151,8 @@ def test_back_to_selection_preserves_choices_and_allows_repreview(remount, block
             expect(widget.get_by_role('heading', name='Review by category')).to_be_visible()
             expect(widget.get_by_role('heading', name='Confirm your cleanup')).to_have_count(0)
             expect(widget.locator('#selection')).to_contain_text('2 selected')
-            if remount:
-                widget.get_by_role('button', name='Archives').click()
+            # The remembered category is already expanded after a remount.
+            expect(widget.get_by_role('button', name='Archives')).to_have_attribute('aria-expanded', 'true')
             expect(widget.get_by_role('checkbox').nth(0)).to_be_checked()
             expect(widget.get_by_role('checkbox').nth(1)).to_be_checked()
             widget.get_by_role('checkbox').nth(0).uncheck()

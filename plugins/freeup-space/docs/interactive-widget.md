@@ -6,7 +6,9 @@ external network requests, remote hosting, or API key.
 
 Open the widget in a new Codex task after installing the updated plugin. The flow is:
 
-1. Choose Quick Scan, Deep Scan, or Deep Scan + AI; optionally set specific folders.
+1. Reopen the latest saved scan, choose an older entry under **Saved scans**, or
+   choose **New scan**. For a new scan, choose Quick Scan, Deep Scan, or
+   Deep Scan + AI; optionally set specific folders.
 2. Watch inventory counters, then a separate count for categorizing files,
    checking duplicates, preparing results and saving. Each stage shows its own
    elapsed time; inventory totals remain as a completed summary. Known totals
@@ -44,15 +46,17 @@ content. A preview generates a random confirmation token bound to the plan diges
 and exact IDs, expires after ten minutes and is invalidated by a new preview.
 Repeated confirmation requests are idempotent within the session.
 
-Each scan runs in an isolated subprocess using the existing engine and task
-workspace. Background jobs allow progress polling while the host remains responsive.
-Multiple widgets can operate without changing the server working directory.
-The CLI saves the scan, plan and receipt under `.freeup-space/runs` in that workspace.
+Each scan runs in an isolated subprocess using the existing engine. Widget artifacts
+are saved outside cloud-synced folders, under the local application data directory
+`Freeup Space/widget-workspaces/<workspace-key>/.freeup-space/runs`. Background
+jobs allow progress polling while the host remains responsive. Multiple widgets
+can operate without changing the server working directory. Ordinary CLI runs
+continue to save artifacts under `.freeup-space/runs` in their working directory.
 Deep scans classify each record once and reuse that evidence for duplicate
 eligibility and the final plan. The inventory checkpoint is saved before analysis;
 no preliminary full plan is built. Widget scans defer the full Markdown report:
 generate it explicitly with `report --run-id RUN_ID --full --summary-only` from
-the same workspace. Ordinary CLI scans still produce their report automatically.
+the scan’s artifact workspace. Ordinary CLI scans still produce their report automatically.
 Large artifacts are streamed to compressed files; plain files from older versions
 remain readable. Category totals and the current search page are cached for each
 immutable plan, so polling does not recalculate them over the full inventory.
@@ -63,8 +67,39 @@ replayed startup snapshot does not reset a running scan, completed report, previ
 or receipt. Reconnection only reads status; it never starts or confirms cleanup.
 Connection failures offer a retry without showing stale scan controls.
 
-Sessions and approval tokens are in memory: after a server restart, reopen the
-widget and scan again. A completed AI packet is advisory and separately validated.
+## Saved results and closing the widget
+
+Opening the widget restores its most recent session for the workspace. A saved
+scan can also be requested explicitly with `open_widget(workspace, run_id)`.
+Reopening reads existing artifacts; it does not start inventory, duplicate
+analysis, AI review, or file moves. Large plans load in the background while the
+widget shows **Loading saved results**. Saved cleanup receipts and matching AI
+findings are restored too; unfinished AI reviews offer **Retry AI review**.
+
+Checked candidate IDs, the plan digest, category, search and page are saved after
+review interactions. Choices are kept separately for each scan. **Clear selection**
+explicitly clears those IDs; **New scan** leaves older results available under
+**Saved scans**. Existing scans stored by earlier installed versions under the
+workspace's hashed Application Support directory are also discoverable.
+
+**Close widget** hides the UI and keeps results and choices. It asks the host to
+close the panel when that API is available; otherwise it shows a closed view with
+**Reopen saved results**. Hiding does not cancel an in-progress operation. The host
+owns panel visibility and may unmount the widget independently; the plugin cannot
+force a panel to remain onscreen. Reopening restores the saved review.
+
+Small recovery records live in the user's local application data under
+`Freeup Space/widget-state` (Application Support on macOS). Session credentials
+are kept in private files (0600 on POSIX), never model-visible tool output. Tests
+redirect these records with `FREEUP_WIDGET_STATE_DIR`. New widget scans use local application storage; recovered scan artifacts remain
+in their original workspace or legacy storage directory. An interrupted analysis
+with a complete inventory offers **Resume saved scan** and reuses that inventory.
+
+Preview confirmation tokens are never saved. After a plugin restart, a previous
+preview returns to selection and must be previewed and confirmed again. A changed
+plan digest clears saved choices. Interrupted file moves are never automatically
+retried. File changes since a scan are checked by the normal dry run and apply
+validation. Saved selections are not deletion approval.
 
 Tool metadata alone is not authentication; the private session key is also checked
 by the service. File paths never become executable commands or HTML markup.

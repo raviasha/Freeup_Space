@@ -13,6 +13,7 @@ from .plans import select_ids
 from .policy import Policy
 from .revalidate import revalidate
 from .trash_macos import move_to_trash as move_to_macos_trash
+from .trash_macos import prepare_for_trash as prepare_macos_trash
 from .trash_windows import move_to_trash as move_to_windows_trash
 
 
@@ -48,7 +49,7 @@ def _move(path: Path, platform: str, reclaimable_bytes: int) -> MoveResult:
     bytes_moved = reclaimable_bytes
     if platform == "macos":
         move_to_macos_trash(path, platform)
-        backend = "finder-trash"
+        backend = "native-trash"
     elif platform == "windows":
         move_to_windows_trash(path, platform)
         backend = "recycle-bin"
@@ -100,6 +101,14 @@ def apply_selection(
             )
             continue
         try:
+            if platform == "macos":
+                prepare_macos_trash(candidate.path, platform)
+                # Downloads can change or replace a cloud item. The original
+                # approval never authorizes moving a different version.
+                decision = revalidate(candidate, policy)
+                if not decision.actionable:
+                    skipped.append(ApplySkipped(candidate.candidate_id, candidate.path, decision.reason))
+                    continue
             result = _move(candidate.path, platform, candidate.reclaimable_bytes)
         except Exception as error:  # pragma: no cover - exercised by platform adapters
             failed.append(

@@ -73,6 +73,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(404)
 
     def do_POST(self):
+        global server, original
         if self.path != "/api" or urlparse(self.headers.get("Origin", "")).netloc != self.headers.get("Host"):
             self.send_error(403)
             return
@@ -81,6 +82,13 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(413)
             return
         data = json.loads(self.rfile.read(size))
+        if data["name"] == "restart_fixture_server":
+            server.service.close()
+            server = Server()
+            original = server.service.command
+            server.service.command = fixture_command
+            self.send(b'{"restarted":true}', "application/json")
+            return
         if data["name"] == "open_widget":
             data["args"] = {"workspace": str(workspace)}
         result = server.dispatch({"method": "tools/call", "params": {"name": data["name"], "arguments": data["args"]}})
