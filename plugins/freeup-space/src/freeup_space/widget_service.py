@@ -1,6 +1,7 @@
 """Stateful widget workflow over the existing CLI. No arbitrary deletion API."""
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import secrets
@@ -12,6 +13,7 @@ from pathlib import Path
 from .investigation import validate_notes
 from .runtime import child_options, cli_command, plugin_root
 from .json_stream import artifact_path, load_json
+from .similar_groups import build_groups
 from .widget_store import WidgetStore, valid_run_id, workspace_key
 
 ROOT = plugin_root()
@@ -143,7 +145,9 @@ class WidgetService:
             selected = [self.candidate(c) for c in plan["candidates"]
                         if c["candidate_id"] in wanted and self.actionable(c)]
             review = dict(ids=[c["candidate_id"] for c in selected], plan_digest=plan["digest"],
-                          category=review.get("category", ""), query=review.get("query", ""), offset=review.get("offset", 0))
+                          category=review.get("category", ""), query=review.get("query", ""), offset=review.get("offset", 0),
+                          similar_group=review.get("similar_group", ""), group_offset=review.get("group_offset", 0))
+            review["selection_digest"] = self.selection_digest(review["ids"], plan["digest"])
             ai = dict(ai_status=None, ai_notes=None, ai_finding_count=0, ai_requested=False)
             if status.get("mode") == "deep-ai":
                 try:
@@ -176,28 +180,73 @@ class WidgetService:
             self.store.save(session)
             return self.view(session)
 
-    def save_review(self, session, ids, plan_digest, category="", query="", offset=0):
+    def save_review(self, session, ids, plan_digest, category="", query="", offset=0, similar_group="", group_offset=0):
         with self.lock:
             if session["status"] != "review" or not session["plan"] or session["closed"]:
                 raise ValueError("Open the scan review before saving a selection")
             if plan_digest != session["plan"]["digest"]:
                 raise ValueError("The displayed plan is stale")
-            if (not isinstance(ids, list) or len(ids) > 500 or any(not isinstance(i, str) for i in ids)
+            if (not isinstance(ids, list) or any(not isinstance(i, str) for i in ids)
                     or len(set(ids)) != len(ids)):
-                raise ValueError("Choose at most 500 distinct candidate IDs")
+                raise ValueError("Choose distinct candidate IDs")
             if (not isinstance(query, str) or len(query) > 500 or not isinstance(category, str)
                     or not isinstance(offset, int) or isinstance(offset, bool) or offset < 0):
                 raise ValueError("Invalid review filters")
-            self.view(session)  # Build the cached index once for this immutable plan.
+            self.view(session, offset, query, category, similar_group, group_offset)
             lookup = session["view_index"]["by_id"]
             candidates = [self.candidate(lookup[i]) for i in ids
                           if i in lookup and self.actionable(lookup[i])]
             if len(candidates) != len(ids):
                 raise ValueError("Selection contains unknown or report-only items")
-            session.update(review_state=dict(ids=ids, plan_digest=plan_digest, category=category, query=query, offset=offset),
+            session.update(review_state=dict(ids=list(ids), plan_digest=plan_digest, category=category, query=query,
+                           offset=offset, similar_group=similar_group, group_offset=group_offset,
+                           selection_digest=self.selection_digest(ids, plan_digest)),
                            selected_candidates=candidates)
             self.store.save(session)
-            return self.view(session, offset, query, category)
+            return self.view(session, offset, query, category, similar_group, group_offset)
+
+    @staticmethod
+    def selection_digest(ids, plan_digest):
+        return hashlib.sha256(json.dumps([plan_digest, ids], separators=(",", ":")).encode("utf-8")).hexdigest()
+
+    def update_review(self, session, add_ids, remove_ids, plan_digest, selection_digest=None, **filters):
+        with self.lock:
+            review = session.get("review_state") or {}
+            if selection_digest is not None and selection_digest != review.get("selection_digest"):
+                raise ValueError("The selection changed. Reconnect before editing it.")
+            for ids in (add_ids, remove_ids):
+                if (not isinstance(ids, list) or len(ids) > 500 or any(not isinstance(i, str) for i in ids)
+                        or len(set(ids)) != len(ids)):
+                    raise ValueError("Use at most 500 distinct IDs per selection update")
+            if set(add_ids) & set(remove_ids):
+                raise ValueError("An item cannot be added and removed together")
+            ids = dict.fromkeys(review.get("ids", []))
+            for identifier in remove_ids:
+                ids.pop(identifier, None)
+            ids.update(dict.fromkeys(add_ids))
+            return self.save_review(session, list(ids), plan_digest, **filters)
+
+    def select_group(self, session, group_id, plan_digest, action):
+        with self.lock:
+            if session["status"] != "review" or session["closed"] or not session["plan"]:
+                raise ValueError("Open the scan review before selecting a group")
+            if plan_digest != session["plan"]["digest"]:
+                raise ValueError("The displayed plan is stale")
+            if action not in {"select", "clear"}:
+                raise ValueError("Choose select or clear")
+            self.view(session)
+            groups = session["view_index"]["similar"]
+            if group_id not in groups["members"]:
+                raise ValueError("Unknown similar-name group")
+            review = session.get("review_state") or {}
+            ids = dict.fromkeys(review.get("ids", []))
+            for c in groups["members"][group_id]:
+                if action == "select" and self.actionable(c):
+                    ids[c["candidate_id"]] = None
+                elif action == "clear":
+                    ids.pop(c["candidate_id"], None)
+            return self.save_review(session, list(ids), plan_digest, review.get("category", ""),
+                review.get("query", ""), review.get("offset", 0), review.get("similar_group", ""), review.get("group_offset", 0))
 
     def dismiss(self, session):
         with self.lock:
@@ -215,11 +264,13 @@ class WidgetService:
             self.store.save(session)
             return self.view(session)
 
-    def view(self, session, offset=0, query="", category=""):
-        if not isinstance(offset, int) or offset < 0:
+    def view(self, session, offset=0, query="", category="", similar_group="", group_offset=0):
+        if any(not isinstance(n, int) or isinstance(n, bool) or n < 0 for n in (offset, group_offset)):
             raise ValueError("Invalid page offset")
         if not isinstance(query, str) or len(query) > 500:
             raise ValueError("Invalid search")
+        if not isinstance(similar_group, str) or not isinstance(category, str):
+            raise ValueError("Invalid review filters")
         plan = session["plan"] or {}
         candidates = plan.get("candidates", [])
         cached = session.get("view_index")
@@ -238,19 +289,32 @@ class WidgetService:
                     total += c["reclaimable_bytes"]
             cached = dict(plan=plan, digest=plan.get("digest"), by_category=by_category, by_id=by_id,
                           groups=sorted(groups.values(), key=lambda g: (-g["bytes"], g["category"])),
-                          actionable_count=count, reclaimable_bytes=total, filter_key=None)
+                          actionable_count=count, reclaimable_bytes=total, filter_key=None,
+                          similar=build_groups(candidates, self.actionable), group_query=None)
             session["view_index"] = cached
-        key = (category, query.casefold())
+        similar = cached["similar"]
+        key = (category, query.casefold(), similar_group)
         if cached["filter_key"] != key:
-            source = cached["by_category"].get(category, []) if category else candidates
+            source = (similar["members"].get(similar_group, []) if similar_group else
+                      cached["by_category"].get(category, []) if category else candidates)
             cached["visible"] = [c for c in source if key[1] in
                 (c["path"] + " " + c["category"] + " " + c["candidate_id"]).casefold()] if query else source
             cached["filter_key"] = key
+        if cached["group_query"] != key[1]:
+            matching = {similar["by_candidate"].get(c["candidate_id"]) for c in candidates
+                        if key[1] in c["path"].casefold()} if query else set(similar["groups"])
+            cached["visible_groups"] = [g for g in similar["ordered"] if g["group_id"] in matching
+                                        or query and key[1] in g["label"].casefold()]
+            cached["group_query"] = key[1]
         visible = cached["visible"]
         result = {k: session[k] for k in ("session_id", "key", "status", "mode", "run_id",
                   "progress", "started_at", "preview", "receipt", "error", "ai_status", "ai_notes")}
-        result.update(plan_digest=plan.get("digest"), candidates=[self.candidate(c) for c in visible[offset:offset+50]],
+        result.update(plan_digest=plan.get("digest"), candidates=[self.grouped_candidate(c, similar) for c in visible[offset:offset+50]],
                       offset=offset, query=query, category=category, categories=cached["groups"],
+                      similar_group=similar_group, group_offset=group_offset,
+                      active_group=similar["groups"].get(similar_group),
+                      similar_groups=cached["visible_groups"][group_offset:group_offset+20],
+                      similar_group_count=len(cached["visible_groups"]),
                       filtered_count=len(visible), candidate_count=len(candidates),
                       actionable_count=cached["actionable_count"], reclaimable_bytes=cached["reclaimable_bytes"],
                       coverage=session.get("coverage", {}), ai_finding_count=session.get("ai_finding_count", 0))
@@ -258,6 +322,14 @@ class WidgetService:
                       ai_auto_request=session.get("ai_auto_request", False),
                       review_state=session.get("review_state", {}), selected_candidates=session.get("selected_candidates", []),
                       saved_scans=session.get("saved_scans", []))
+        return result
+
+    def grouped_candidate(self, candidate, similar):
+        result = self.candidate(candidate)
+        group = similar["groups"].get(similar["by_candidate"].get(candidate["candidate_id"]))
+        if group:
+            result.update(similar_group_id=group["group_id"], similar_group_count=group["actionable_count"],
+                          similar_group_label=group["label"])
         return result
 
     @staticmethod
@@ -284,6 +356,14 @@ class WidgetService:
     def command(self, session, args, progress=False):
         options = child_options()
         options["env"]["FREEUP_WIDGET_PROGRESS"] = "1" if progress else "0"
+        input_ids = None
+        # Keep large selections off the OS command line (especially on Windows).
+        if args[0] == "apply":
+            first_id = 4 if args[3:4] == ["--dry-run"] else 3
+            if len(args) - first_id > 400:
+                input_ids = json.dumps(args[first_id:])
+                args = [*args[:first_id], "--ids-stdin"]
+                options["stdin"] = subprocess.PIPE
         process = subprocess.Popen(cli_command(args), cwd=session.get("artifact_workspace", session["workspace"]), **options)
         with self.lock:
             session["process"] = process
@@ -328,6 +408,13 @@ class WidgetService:
 
         reader = threading.Thread(target=stderr_reader, daemon=True)
         reader.start()
+        if input_ids is not None:
+            try:
+                process.stdin.write(input_ids)
+            except BrokenPipeError:
+                pass  # The child's error is returned below.
+            finally:
+                process.stdin.close()
         output = process.stdout.read()
         process.stdout.close()
         process.wait()
@@ -458,21 +545,27 @@ class WidgetService:
             raise ValueError("The plan changed. Start a new scan and review it.")
         return plan
 
-    def preview(self, session, ids, plan_digest):
+    def preview(self, session, ids, plan_digest, selection_digest=None):
         with self.lock:
             if session["status"] not in {"review", "preview"}:
                 raise ValueError("Complete the scan before previewing")
+            if ids is None:
+                review = session.get("review_state") or {}
+                if not selection_digest or selection_digest != review.get("selection_digest"):
+                    raise ValueError("The selection changed. Reconnect and review it again.")
+                ids = list(review.get("ids", []))
             plan = self.check_plan(session)
             if plan_digest != plan["digest"]:
                 raise ValueError("The displayed plan is stale")
-            if not isinstance(ids, list) or not 1 <= len(ids) <= 500 or any(not isinstance(i, str) for i in ids):
-                raise ValueError("Select between 1 and 500 candidates")
+            if not isinstance(ids, list) or not ids or any(not isinstance(i, str) for i in ids):
+                raise ValueError("Select at least one candidate")
             allowed = {c["candidate_id"]: c for c in plan["candidates"] if self.actionable(c)}
             if len(set(ids)) != len(ids) or any(i not in allowed for i in ids):
                 raise ValueError("Selection contains unknown, duplicate, or report-only candidate IDs")
             selected = [self.candidate(allowed[i]) for i in ids]
             review = session.get("review_state") or {}
-            session.update(review_state=dict(review, ids=list(ids), plan_digest=plan_digest), selected_candidates=selected)
+            session.update(review_state=dict(review, ids=list(ids), plan_digest=plan_digest,
+                selection_digest=self.selection_digest(ids, plan_digest)), selected_candidates=selected)
             session.update(status="previewing", preview=None, error=None)
             self.store.save(session)
 

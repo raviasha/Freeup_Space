@@ -525,9 +525,19 @@ def cmd_quick(args: argparse.Namespace) -> int:
 
 
 def _selection_ids(args: argparse.Namespace) -> tuple[str, ...]:
-    if not args.ids:
+    ids = args.ids
+    if getattr(args, "ids_stdin", False):
+        if ids:
+            raise RunArtifactError("choose positional candidate IDs or --ids-stdin, not both")
+        try:
+            ids = json.load(sys.stdin)
+        except (ValueError, UnicodeError) as error:
+            raise RunArtifactError("stdin must contain a JSON list of candidate IDs") from error
+        if not isinstance(ids, list) or any(not isinstance(i, str) for i in ids):
+            raise RunArtifactError("stdin must contain a JSON list of candidate IDs")
+    if not ids:
         raise RunArtifactError("explicit candidate IDs are required")
-    return tuple(args.ids)
+    return tuple(ids)
 
 
 def cmd_apply(args: argparse.Namespace) -> int:
@@ -742,7 +752,8 @@ def build_parser() -> argparse.ArgumentParser:
     apply_cmd.add_argument("--run-id", required=True)
     apply_cmd.add_argument("--platform")
     apply_cmd.add_argument("--dry-run", action="store_true")
-    apply_cmd.add_argument("ids", nargs="+")
+    apply_cmd.add_argument("--ids-stdin", action="store_true", help="read an explicit JSON list of candidate IDs from stdin")
+    apply_cmd.add_argument("ids", nargs="*")
     apply_cmd.set_defaults(func=cmd_apply)
 
     permanent = subparsers.add_parser("permanent-delete")

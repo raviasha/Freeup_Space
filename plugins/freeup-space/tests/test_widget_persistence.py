@@ -72,8 +72,8 @@ def test_selection_filters_survive_restart_but_confirmation_does_not(saved):
     new = WidgetService()
     recovered = wait(new.session(session["session_id"], session["key"]))
     view = new.view(recovered)
-    assert view["review_state"] == {"ids": ids, "category": "archive", "query": "one", "offset": 0,
-                                      "plan_digest": session["plan"]["digest"]}
+    assert {k: v for k, v in view["review_state"].items() if k != "selection_digest"} == {"ids": ids, "category": "archive", "query": "one", "offset": 0,
+                                      "plan_digest": session["plan"]["digest"], "similar_group": "", "group_offset": 0}
     assert [c["candidate_id"] for c in view["selected_candidates"]] == ids
     assert recovered["status"] == "review" and recovered["preview"] is None
     with pytest.raises(ValueError):
