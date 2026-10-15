@@ -18,8 +18,8 @@ workspace = directory / "workspace"
 workspace.mkdir()
 files = directory / "Downloads"
 files.mkdir()
-for i in range(60):
-    (files / ("sample-%02d.zip" % i)).write_bytes(bytes([i]) * 4096)
+for i in range(int(os.environ.get("FREEUP_TEST_ARCHIVE_COUNT", "60"))):
+    (files / ("sample-%02d.zip" % i)).write_bytes(bytes([i % 256]) * 4096)
 (files / "example.dmg").write_bytes(b"installer" * 500)
 (files / "unknown.bin").write_bytes(b"unknown" * 500)
 server = Server()

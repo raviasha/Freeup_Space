@@ -1,4 +1,4 @@
-"""Small private recovery records. Scan artifacts remain in their original folders."""
+"""Private recovery records. Scan artifacts remain in their original folders."""
 import hashlib
 import json
 import os
@@ -32,14 +32,15 @@ class WidgetStore:
     def __init__(self):
         self.root = Path(os.environ.get("FREEUP_WIDGET_STATE_DIR", application_root() / "widget-state"))
 
-    def _read(self, name):
+    def _read(self, name, large_record=False):
         path = self.root / name
         if not path.exists():
             return None
-        if path.is_symlink() or path.stat().st_size > 2_000_000:
+        if path.is_symlink() or not large_record and path.stat().st_size > 2_000_000:
             raise ValueError("Invalid widget recovery record")
         try:
-            data = json.loads(path.read_text(encoding="utf-8"))
+            with path.open(encoding="utf-8") as stream:
+                data = json.load(stream)
         except (ValueError, UnicodeError) as error:
             raise ValueError("Saved widget state is unreadable; reopen a saved scan.") from error
         if not isinstance(data, dict):
@@ -49,7 +50,8 @@ class WidgetStore:
     def load(self, identifier):
         if not isinstance(identifier, str) or not re.fullmatch(r"[0-9a-f]{32}", identifier):
             raise ValueError("Invalid widget session")
-        data = self._read(identifier + ".json")
+        # Exact selections and receipts can legitimately contain every plan item.
+        data = self._read(identifier + ".json", large_record=True)
         if data and (data.get("session_id") != identifier or not isinstance(data.get("key"), str)
                      or not Path(data.get("workspace", "")).is_absolute()):
             raise ValueError("Invalid widget recovery record")
@@ -61,7 +63,7 @@ class WidgetStore:
 
     def review(self, workspace, run_id):
         name = "review-{}-{}.json".format(workspace_key(workspace), valid_run_id(run_id))
-        return self._read(name) or {}
+        return self._read(name, large_record=True) or {}
 
     def _write(self, name, value):
         self.root.mkdir(parents=True, exist_ok=True, mode=0o700)

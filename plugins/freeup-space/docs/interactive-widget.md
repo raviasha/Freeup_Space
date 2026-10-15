@@ -15,11 +15,18 @@ Open the widget in a new Codex task after installing the updated plugin. The flo
    use a progress bar. Unknown totals stay indeterminate, and a delayed update
    is reported as the time since the last real progress event. Cancel is available
    while scanning; an inventory checkpoint cannot be applied as a cleanup plan.
-3. Expand categories to see each file or aggregate cache folder, path, size, risk,
-   reasons and retained duplicate copy. Report-only findings are disabled. Search
-   and paging support large reports. Selections persist across categories/pages;
-   nothing is preselected. Bulk selection explicitly selects the visible items.
-4. Preview up to 500 selected items. A dry run revalidates every candidate. Any
+3. Review **Similar-name groups** to select related files across the entire scan,
+   including hidden pages and folders. Each group shows its filename pattern,
+   formats, full count, selectable count and estimated size. **Select all** selects
+   every eligible member; **Show group files** opens its paged file list;
+   **Clear group** leaves other selections intact. Individual files also offer
+   **Select similar**. Expand the existing categories to see each file or aggregate
+   cache folder, path, size, risk, reasons and retained duplicate copy. Report-only
+   findings are disabled. Selections persist across categories/pages; nothing is
+   preselected. **Select visible items** remains limited to the displayed page.
+4. Preview the complete selection, including groups larger than 500 files. The
+   preview lists 50 files per page, with a total for the entire selection. A dry
+   run revalidates every candidate. Any
    changed or blocked item prevents confirmation until the selection is revised.
 5. Confirm the exact preview to move items to Trash / Recycle Bin. The engine
    revalidates again at apply time and reports moved, skipped and failed items.
@@ -88,7 +95,7 @@ close the panel when that API is available; otherwise it shows a closed view wit
 owns panel visibility and may unmount the widget independently; the plugin cannot
 force a panel to remain onscreen. Reopening restores the saved review.
 
-Small recovery records live in the user's local application data under
+Recovery records live in the user's local application data under
 `Freeup Space/widget-state` (Application Support on macOS). Session credentials
 are kept in private files (0600 on POSIX), never model-visible tool output. Tests
 redirect these records with `FREEUP_WIDGET_STATE_DIR`. New widget scans use local application storage; recovered scan artifacts remain
@@ -105,6 +112,28 @@ Tool metadata alone is not authentication; the private session key is also check
 by the service. File paths never become executable commands or HTML markup.
 File moves use the existing race-resistant validation and platform Trash adapters.
 OS permissions remain applicable and may require a host approval or Full Disk Access.
+
+## Similar-name groups
+
+Groups are computed from the complete saved cleanup plan without another scan or
+file-content access. Names are normalized for Unicode, letter case, separators,
+number sequences (`#`) and trailing copy suffixes such as `(1)` or `- Copy 2`.
+Related video, audio, image, document, spreadsheet, presentation and archive
+formats share a family: `Lesson_01.mp4` and `Lesson_02.mov` appear under
+**Videos · lesson #**. Other extensions stay separate. Numeric-only names and
+aggregate directories are not grouped. A group requires at least two matching
+files; similar names never imply equal contents or establish cleanup eligibility.
+
+Groups are sorted by selectable bytes and paged 20 at a time. Search filters the
+group listing, but each group's count and selection always cover its full
+membership across the scan. Group selection is an app-only action bound to the
+displayed plan digest and private session credentials. It saves exact candidate
+IDs and never creates a preview or a confirmation. Report-only files stay
+unselectable. The widget sends individual selection edits in bounded batches and
+previews the saved selection by its digest, so large groups do not exceed request
+size limits. A changed selection invalidates that digest. Session and per-scan
+recovery records support large selections and receipts. Large selections are passed to the CLI as JSON through stdin to
+avoid command-line length limits; preview and confirmation use the same exact IDs.
 
 ## Verification
 

@@ -36,8 +36,14 @@ TOOLS = [
     tool("open_widget", "Freeup Space", "Open or recover the interactive disk cleanup widget. Reopens the latest saved scan without rescanning; optionally name a saved run_id. Use the task's absolute workspace directory. The user selects items and confirms Trash inside the widget.", {"workspace": STRING, "run_id": STRING}, ["workspace"]),
     tool("open_saved_scan", "Reopen saved scan", "Load a completed scan in this workspace without scanning or moving files.", dict(SESSION, run_id=STRING), app=True),
     tool("save_review_state", "Remember review choices", "Save checked IDs and filters only. This never previews, approves or moves files.",
-         dict(SESSION, ids={"type": "array", "items": STRING, "maxItems": 500}, plan_digest=STRING,
-              category=STRING, query=STRING, offset={"type": "integer", "minimum": 0}), app=True, readonly=False),
+         dict(SESSION, ids={"type": "array", "items": STRING}, plan_digest=STRING,
+              add_ids={"type": "array", "items": STRING, "maxItems": 500},
+              remove_ids={"type": "array", "items": STRING, "maxItems": 500}, selection_digest=STRING,
+              category=STRING, query=STRING, offset={"type": "integer", "minimum": 0},
+              similar_group=STRING, group_offset={"type": "integer", "minimum": 0}),
+         ["session_id", "key", "plan_digest", "category", "query", "offset"], app=True, readonly=False),
+    tool("select_similar_group", "Select similar files", "Select or clear every eligible member of a filename group across the complete scan. Never previews or moves files.",
+         dict(SESSION, group_id=STRING, plan_digest=STRING, action={"type": "string", "enum": ["select", "clear"]}), app=True, readonly=False),
     tool("dismiss_widget", "Close widget", "Hide the widget while retaining the scan and selected IDs. No file moves.", SESSION, app=True, readonly=False),
     tool("cancel_preview", "Back to selection", "Invalidate the preview and return to editing the selection.", SESSION, app=True, readonly=False),
     tool("start_scan", "Start scan", "Start the mode selected by the user in the widget; never deletes files.",
@@ -45,13 +51,14 @@ TOOLS = [
               paths={"type": "array", "items": STRING, "maxItems": 20}),
          ["session_id", "key", "mode", "request_id"], app=True, readonly=False),
     tool("scan_status", "Scan progress and categories", "Read live progress, categories and a page of items.",
-         dict(SESSION, offset={"type": "integer", "minimum": 0}, query=STRING, category=STRING),
+         dict(SESSION, offset={"type": "integer", "minimum": 0}, query=STRING, category=STRING,
+              similar_group=STRING, group_offset={"type": "integer", "minimum": 0}),
          ["session_id", "key"], app=True),
     tool("resume_scan", "Resume saved scan", "Resume analysis of the saved inventory without moving files.", dict(SESSION, request_id=STRING), app=True, readonly=False),
     tool("cancel_scan", "Cancel scan", "Cancel the current inventory or duplicate analysis.", SESSION, app=True, readonly=False),
     tool("preview_selection", "Preview selected items", "Revalidate the user's checked items and prepare a ten-minute confirmation.",
-         dict(SESSION, ids={"type": "array", "items": STRING, "minItems": 1, "maxItems": 500, "uniqueItems": True},
-              plan_digest=STRING), app=True, readonly=False),
+         dict(SESSION, ids={"type": "array", "items": STRING, "minItems": 1, "uniqueItems": True},
+              plan_digest=STRING, selection_digest=STRING), ["session_id", "key", "plan_digest"], app=True, readonly=False),
     tool("confirm_trash", "Move selected items to Trash", "Confirm the exact preview. Recoverable Trash/Recycle Bin only. Never permanently delete or empty Trash.",
          dict(SESSION, token=STRING), app=True, readonly=False),
     tool("request_ai_review", "Request AI review", "Mark the metadata packet for Codex review after Deep Scan + AI.", SESSION, app=True, readonly=False),
@@ -81,7 +88,7 @@ def validate(value, schema):
         for key, item in value.items():
             validate(item, props[key])
     if kind == "array":
-        if not schema.get("minItems", 0) <= len(value) <= schema.get("maxItems", 1000):
+        if not schema.get("minItems", 0) <= len(value) <= schema.get("maxItems", len(value)):
             raise ValueError("Invalid selection size")
         for item in value:
             validate(item, schema.get("items", {}))
@@ -122,7 +129,16 @@ class Server:
         if name == "open_saved_scan":
             view = self.service.open_saved(session, args["run_id"])
         elif name == "save_review_state":
-            view = self.service.save_review(session, args["ids"], args["plan_digest"], args["category"], args["query"], args["offset"])
+            filters = {k: args[k] for k in ("category", "query", "offset", "similar_group", "group_offset") if k in args}
+            if "ids" in args:
+                if "add_ids" in args or "remove_ids" in args:
+                    raise ValueError("Choose a full selection or incremental updates")
+                view = self.service.save_review(session, args["ids"], args["plan_digest"], **filters)
+            else:
+                view = self.service.update_review(session, args.get("add_ids", []), args.get("remove_ids", []),
+                    args["plan_digest"], args.get("selection_digest"), **filters)
+        elif name == "select_similar_group":
+            view = self.service.select_group(session, args["group_id"], args["plan_digest"], args["action"])
         elif name == "dismiss_widget":
             view = self.service.dismiss(session)
         elif name == "cancel_preview":
@@ -131,13 +147,14 @@ class Server:
             view = self.service.start(session, args["mode"], args["request_id"], args.get("paths"))
         elif name == "scan_status":
             with self.service.lock:
-                view = self.service.view(session, args.get("offset", 0), args.get("query", ""), args.get("category", ""))
+                view = self.service.view(session, args.get("offset", 0), args.get("query", ""), args.get("category", ""),
+                                         args.get("similar_group", ""), args.get("group_offset", 0))
         elif name == "resume_scan":
             view = self.service.resume(session, args["request_id"])
         elif name == "cancel_scan":
             view = self.service.cancel(session)
         elif name == "preview_selection":
-            view = self.service.preview(session, args["ids"], args["plan_digest"])
+            view = self.service.preview(session, args.get("ids"), args["plan_digest"], args.get("selection_digest"))
         elif name == "confirm_trash":
             view = self.service.confirm(session, args["token"])
         elif name == "request_ai_review":

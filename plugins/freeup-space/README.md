@@ -6,8 +6,11 @@ recoverable cleanup inside the interactive widget. The plugin records the exact
 candidate IDs behind your selection; you do not need to type them.
 
 The widget includes live scan progress, search, paginated category contents,
-selection totals, AI findings and cleanup receipts. It supports Trash / Recycle
-Bin only. See [the widget guide](docs/interactive-widget.md).
+selection totals, AI findings and cleanup receipts. Similar-name groups combine
+related formats, such as `.mp4` and `.mov`, and let you select every matching file
+across the scan, including other folders and hidden pages. You can review the
+complete selection before confirming cleanup. It supports Trash / Recycle Bin
+only. See [the widget guide](docs/interactive-widget.md).
 
 | Mode | What it does | AI usage |
 | --- | --- | --- |
