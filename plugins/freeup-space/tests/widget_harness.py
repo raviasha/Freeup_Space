@@ -22,6 +22,12 @@ for i in range(int(os.environ.get("FREEUP_TEST_ARCHIVE_COUNT", "60"))):
     (files / ("sample-%02d.zip" % i)).write_bytes(bytes([i % 256]) * 4096)
 (files / "example.dmg").write_bytes(b"installer" * 500)
 (files / "unknown.bin").write_bytes(b"unknown" * 500)
+if os.environ.get("FREEUP_TEST_RECOMMENDATIONS"):
+    for i in range(60):
+        for version in (1, 2):
+            path = files / ("Draft%02d_v%d.docx" % (i, version))
+            path.write_bytes(("document %d version %d " % (i, version)).encode() * 1000)
+            os.utime(path, (1609459200 + version, 1609459200 + version))
 server = Server()
 original = server.service.command
 

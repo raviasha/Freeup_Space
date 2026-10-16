@@ -11,6 +11,7 @@
 .items{max-height:520px;overflow-y:auto;overscroll-behavior:contain}
 progress{display:block;width:100%;height:8px;margin:15px 0 20px;accent-color:var(--accent)}
 .similar-card{border:1px solid var(--line);border-radius:10px;padding:14px}.similar-card h3{overflow-wrap:anywhere}.similar-groups{display:grid;gap:10px;margin:14px 0 22px}.group-files{margin:18px 0;border:1px solid var(--accent);border-radius:10px;padding:15px}.group-files .items{border-top:0;padding:0}.similar-action{margin-top:8px;font-size:12px;padding:4px 8px}
+.review-cards{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin:14px 0 20px}.review-card{border:1px solid var(--line);border-radius:12px;padding:16px;display:flex;flex-direction:column;gap:6px}.review-card p{flex:1;font-size:12px;margin:0}.review-card button{align-self:flex-start}.recommendation-files{border:1px solid var(--accent);border-radius:12px;padding:16px;margin:20px 0}.recommendation-files .items{padding:0}.keep{color:var(--accent);font-weight:600;font-size:12px;margin-top:6px}.review-section{margin-top:24px}select{font:inherit;color:var(--fg);background:var(--bg);border:1px solid var(--line);padding:7px;border-radius:6px}@media(max-width:580px){.review-cards{grid-template-columns:1fr}}
 </style>
 </head>
 <body><main><header><div class="brand"><div class="mark" aria-hidden="true">◫</div><div><h1>Freeup Space</h1><small>Choose what stays. Clear what you no longer need.</small></div></div><span class="badge">Recoverable cleanup</span></header><div id="error" role="alert" hidden></div><div id="app" aria-live="polite"><p class="muted">Connecting to Freeup Space…</p></div></main>
@@ -33,6 +34,8 @@ const save=saveQueue.then(async()=>{
  return result;
 });saveQueue=save.catch(()=>{});return save;}
 async function selectSimilar(groupId,action="select"){busy=true;render();try{await saveChoices();const result=await call("select_similar_group",{group_id:groupId,action,plan_digest:state.plan_digest});savedChoices(extract(result));accept(result);}finally{busy=false;render();}}
+async function selectRecommended(key,action="select"){busy=true;render();try{await saveChoices();const result=await call("select_recommended",{category:key,action,plan_digest:state.plan_digest});savedChoices(extract(result));accept(result);}finally{busy=false;render();}}
+async function showRecommendation(key,keepSearch=false){category=key;similarGroup="";if(!keepSearch)query="";offset=0;groupOffset=0;await changePage();$(".recommendation-files")?.scrollIntoView({block:"start"});}
 async function showGroup(group){similarGroup=group.group_id;category="";query="";offset=0;await changePage();$(".group-files")?.scrollIntoView({block:"start"});}
 async function changePage(){await saveChoices();await refresh();}
 async function reopen(){const result=await call("open_widget",{workspace:state.workspace});restore(result);}
@@ -121,6 +124,14 @@ function item(candidate,check=true){const row=el("div",undefined,"item"),main=el
 if(check){const input=el("input");input.type="checkbox";input.id=id;input.checked=selected.has(candidate.candidate_id);input.disabled=!candidate.actionable||busy;input.onchange=()=>guard(async()=>{if(input.checked)selected.set(candidate.candidate_id,candidate);else selected.delete(candidate.candidate_id);renderFooter();await saveChoices();});row.append(input)}
 const name=el(check?"label":"strong",candidate.path.split(/[\\/]/).filter(Boolean).at(-1)||candidate.path);if(check)name.htmlFor=id;
 append(main,name,el("div",candidate.path,"path"),el("span",`${candidate.candidate_id} · ${candidate.actionable?candidate.risk+" risk":"Report only — not selectable"}`,"risk "+candidate.risk));
+const review=candidate.review_details;
+if(review){
+ if(review.version_role)main.append(el("div",review.version_role==="keep"?"Keep — latest version":"Earlier version · review before removal",review.version_role==="keep"?"keep":"reason"));
+ if(review.version_role==="older")for(const path of review.keep_paths||[])main.append(el("div","Keep: "+path,"path"));
+ if(review.version_note)main.append(el("div",review.version_note,"reason"));
+ if(review.recommendation_reason)main.append(el("div",review.recommendation_reason,"reason"));
+ if(review.is_personal){main.append(el("div",review.opening_history_label+(review.last_opened_at?": "+new Date(review.last_opened_at*1000).toLocaleDateString():""),"reason"));if(review.modified_at)main.append(el("div","Modified: "+new Date(review.modified_at*1000).toLocaleDateString(),"path"));}
+}
 if(candidate.retained_path)main.append(el("div","Keep: "+candidate.retained_path,"reason"));
 if(candidate.reasons?.length){const d=el("details"),summary=el("summary","Why this item?");d.append(summary);for(const r of candidate.reasons)d.append(el("div",r,"reason"));main.append(d)}
 if(check&&candidate.similar_group_id){const b=button(`Select similar (${candidate.similar_group_count})`,()=>selectSimilar(candidate.similar_group_id),false,!candidate.similar_group_count);b.className="similar-action";b.title=`Select every eligible file in ${candidate.similar_group_label}, across all folders and pages`;main.append(b)}
@@ -129,6 +140,7 @@ function renderCoverage(){const c=state.coverage||{},d=el("details"),lines=[];d.
 if(c.status)lines.push("Coverage: "+c.status);if(c.time_budget_exhausted)lines.push("Quick Scan reached its time budget; some locations were not scanned.");
 if(c.scope)lines.push(c.scope);if(c.duplicates)lines.push("Duplicate analysis: "+c.duplicates);
 if(c.duplicate_scope)lines.push("Duplicates use the highest-value folders within file, byte and time budgets; not every file is compared.");
+if(c.opening_history){const h=c.opening_history;lines.push(`Opening history: ${h.status} · ${h.known_files} known of ${h.eligible_files} eligible personal files.`);if(h.budget_exhausted)lines.push("Opening-history limits were reached. Unchecked files remain unknown.");}
 if(c.old_file_months)lines.push("Older files means not modified for 12 months, not proven unused.");
 if(c.excluded_count)lines.push(`${c.excluded_count} paths excluded.`);if(c.skipped_links)lines.push(`${c.skipped_links} linked paths skipped.`);
 for(const text of lines)d.append(el("p",text,"muted"));for(const path of c.skipped_paths||[])d.append(el("div",path,"path"));app.append(d);}
@@ -146,8 +158,27 @@ append(toolbar,button("Select visible items",async()=>{for(const c of state.cand
 for(const c of state.candidates)items.append(item(c));if(!state.candidates.length)items.append(el("p","No matching items.","muted"));
 if(state.filtered_count>50)append(items,append(el("div",undefined,"toolbar"),button("Previous",async()=>{offset-=50;await changePage()},false,offset===0),el("small",`${offset+1}–${Math.min(offset+50,state.filtered_count)} of ${state.filtered_count}`),button("Next",async()=>{offset+=50;await changePage()},false,offset+50>=state.filtered_count)));
 return items;}
+function renderRecommendations(){
+if(!state.review_categories)return;
+append(app,el("h2","Review cleanup opportunities","review-section"),el("p","Start with a reason to clean up. Categories can overlap; each selected file counts once. Nothing is selected automatically.","muted"));
+const cards=el("div",undefined,"review-cards");
+for(const group of state.review_categories){const card=el("section",undefined,"review-card");append(card,el("h3",group.title),el("p",group.description,"muted"),el("strong",`${group.count} files · ${bytes(group.review_bytes)}`),el("small",`${group.recommended_count} recommended · ${bytes(group.recommended_bytes)} potential cleanup`),button("Review files",()=>showRecommendation(group.category)));cards.append(card);}app.append(cards);
+const group=state.active_recommendation;if(!group||similarGroup)return;
+const box=el("section",undefined,"recommendation-files");
+append(box,el("h2",group.title),el("p",group.description,"muted"),el("p",`${group.count} files · ${group.recommended_count} recommended · ${bytes(group.recommended_bytes)} potential cleanup`,"notice"));
+if(group.months){const label=el("label","Inactivity period "),select=el("select");select.setAttribute("aria-label","Inactivity period");select.disabled=busy;for(const months of [6,12,24]){const option=el("option",`${months} months`);option.value=months;option.selected=months===group.months;select.append(option)}select.onchange=()=>guard(()=>showRecommendation(category.replace(/:\d+$/,":"+select.value),true));append(box,append(label,select));if(category.startsWith("review:not-opened:"))box.append(el("p",`${state.opening_history_unknown_count} personal files have unavailable opening history. Review them under Not modified recently.`,"muted"));}
+if(group.note)box.append(el("p",group.note,"notice"));
+append(box,append(el("div",undefined,"toolbar"),button(`Select recommended files (${group.recommended_count})`,()=>selectRecommended(category),true,!group.recommended_count),button("Clear recommendations",()=>selectRecommended(category,"clear"),false,!group.recommended_count),button("Back to opportunities",()=>showRecommendation(""))),el("p","Recommendation selection includes the entire category, including files hidden by search and paging. Preview your selection before confirming.","muted"));
+if(category==="review:older-versions"){
+ for(const version of state.version_groups){const card=el("section",undefined,"similar-card");append(card,el("h3",version.title),el("p",`${version.count} versions · ${version.recommended_count} recommended · ${bytes(version.recommended_bytes)}`,"muted"));for(const path of version.keep_paths||[])card.append(el("div","Keep: "+path,"path"));if(version.note)card.append(el("p",version.note,"notice"));card.append(button("Show versions",()=>showRecommendation(version.category,true)));box.append(card);}
+ if(!state.version_group_count)box.append(el("p","No matching version groups.","muted"));
+ if(state.version_group_count>20)box.append(append(el("div",undefined,"toolbar"),button("Previous version groups",async()=>{groupOffset-=20;await changePage()},false,groupOffset===0),el("small",`${groupOffset+1}–${Math.min(groupOffset+20,state.version_group_count)} of ${state.version_group_count} groups`),button("Next version groups",async()=>{groupOffset+=20;await changePage()},false,groupOffset+20>=state.version_group_count)));
+}else box.append(reviewItems());
+app.append(box);
+}
 function renderReview(){if(state.error)app.append(el("p",state.error,"notice"));renderSaved();append(app,append(el("div",undefined,"stats"),stat(bytes(state.reclaimable_bytes),"estimated cleanup"),stat(String(state.actionable_count),"selectable items"),stat(String(state.categories.length),"categories")));
 const search=el("input");search.type="search";search.value=query;search.disabled=busy;search.placeholder="Search item names or paths";search.setAttribute("aria-label","Search cleanup items");search.onchange=()=>guard(async()=>{query=search.value;offset=0;groupOffset=0;await changePage()});app.append(search);
+renderRecommendations();
 renderSimilarGroups();
 if(similarGroup){const group=state.active_group,box=el("section",undefined,"group-files");
 append(box,el("h2",group?.label||"Group files"),el("p","Group selection includes every selectable match, including files hidden by search or paging.","muted"),button("Back to categories",async()=>{similarGroup="";category="";offset=0;await changePage()}),reviewItems());app.append(box);}

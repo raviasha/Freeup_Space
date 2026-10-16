@@ -10,7 +10,7 @@ FORMATS = {
     "Videos": "mp4 mov mkv m4v avi webm mpg mpeg wmv flv 3gp mts m2ts",
     "Audio": "mp3 m4a aac wav flac ogg opus aiff aif wma",
     "Images": "jpg jpeg png heic heif webp gif tiff tif bmp avif dng raw cr2 nef arw",
-    "Documents": "pdf doc docx odt rtf txt",
+    "Documents": "pdf doc docx odt rtf txt pages",
     "Presentations": "ppt pptx odp key",
     "Spreadsheets": "xls xlsx ods csv tsv numbers",
     "Archives": "zip 7z rar tar tar.gz tar.bz2 tar.xz tgz gz bz2 xz",

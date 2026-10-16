@@ -32,6 +32,34 @@ to Trash does not necessarily free that storage immediately. Deleting iCloud fil
 also deletes their synced copies. To keep the cloud copy and only reclaim local
 space, use Finder's **Remove Download** instead.
 
+## Cleanup opportunities
+
+The widget offers categories based on why you might remove a file:
+
+- **Disposable clutter:** known caches, logs and temporary files; recommends only low-risk regular files unchanged for 7 days.
+- **Extra copies:** verified identical contents with an identified copy to keep.
+- **Older versions:** explicit revisions such as `Proposal_v1.docx`, `Proposal_v2.docx` and `Proposal_v10.docx` in the same folder and format. Keep only v10; review the earlier drafts for unique content. Tied versions or conflicting modification dates require individual review. Ordinary photo numbers are not revisions; source documents and PDF exports stay separate.
+- **Not opened recently:** recorded opening and modification both at least 6, 12 or 24 months old (12 by default).
+- **Large personal files:** files of at least 100 MiB, largest first.
+- **Old downloads and installers:** unchanged for 90 days; personal documents and media need individual review.
+- **Not modified recently:** a separate 6/12/24-month fallback when opening history is unavailable.
+
+**Select recommended files** covers the complete saved category, including items hidden
+by search or paging, while preserving other choices. Each file counts once even when
+categories overlap. Recommendations exclude protected files and files promised as Keep.
+If a required keeper is already selected, clear it before selecting recommendations.
+The latest unselected version is revalidated during preview and before moving an earlier
+version; a missing or changed keeper blocks that removal.
+Nothing is selected automatically. Age and size alone do not recommend deletion;
+personal drafts keep their review risk. Preview still requires explicit confirmation.
+
+New Deep scans collect recorded macOS application-opening metadata from LaunchServices,
+with a 10,000-file and 5-second lookup limit. The results and coverage are saved with
+the inventory and reused without querying live metadata on resume. This history can
+be incomplete. Windows, Quick scans, older saved scans and unavailable metadata show
+**Opening history unavailable**; filesystem access time is never substituted. The
+modification fallback never claims that a file was not opened or is safe to remove.
+
 ## Install with Setup (recommended)
 
 Download the [installer for Windows or Mac](https://github.com/raviasha/Freeup_Space/releases/latest),
@@ -177,7 +205,8 @@ AI models, SDK/simulators, mail/media, creative libraries and version-control st
 These managed-store hints are recommendations to inspect the owning application,
 not native application cleanup adapters or proof that a particular item is unused.
 
-Age means **not modified for 12 months**, not proven unused. Similar-image culling,
+The CLI older-file finding means **not modified for 12 months**, not proven unused.
+The widget separates recorded opening history from modification age. Similar-image culling,
 blur detection and ebook organization are separate workflows, not features of this plugin.
 Duplicate hashes compare the primary file stream; metadata/resource forks and alternate
 streams are not a claim of archival equivalence. Keep the appropriate original.

@@ -15,7 +15,13 @@ Open the widget in a new Codex task after installing the updated plugin. The flo
    use a progress bar. Unknown totals stay indeterminate, and a delayed update
    is reported as the time since the last real progress event. Cancel is available
    while scanning; an inventory checkpoint cannot be applied as a cleanup plan.
-3. Review **Similar-name groups** to select related files across the entire scan,
+3. Start with **Review cleanup opportunities**. Open a category, inspect its reasons
+   and keep recommendations, and choose **Select recommended files** to select across
+   the entire saved category. Older-version groups retain the highest explicit revision
+   in the same folder and format. Inactivity views have 6/12/24-month controls and clearly
+   separate unknown opening history from modification age. No recommendations are selected
+   automatically; personal-file versions still need review.
+   Review **Similar-name groups** to select related files across the entire scan,
    including hidden pages and folders. Each group shows its filename pattern,
    formats, full count, selectable count and estimated size. **Select all** selects
    every eligible member; **Show group files** opens its paged file list;
@@ -112,6 +118,33 @@ Tool metadata alone is not authentication; the private session key is also check
 by the service. File paths never become executable commands or HTML markup.
 File moves use the existing race-resistant validation and platform Trash adapters.
 OS permissions remain applicable and may require a host approval or Full Disk Access.
+
+## Recommendation evidence
+
+Category totals and recommendation membership are computed once per immutable plan.
+Search only filters displayed files and version groups; it never narrows **Select recommended
+files**. Selection stores exact eligible IDs and preserves unrelated choices. Protected and
+report-only paths stay unselectable. Keepers are excluded from every recommendation category;
+selecting recommendations fails if a required keeper is already checked. Manual choices remain
+available, and the preview shows version keep paths and recommendation reasons. The CLI
+derives version dependencies from the immutable plan without changing legacy plan digests.
+Dry run and apply recheck each unselected latest keeper against its saved snapshot, including
+a second check after macOS cloud preparation. Missing or changed keepers block older-version
+removal. Explicitly selecting all versions is still a manual choice.
+
+Explicit suffixes `v`, `ver`, `version`, `rev` and `revision` followed by numeric revisions
+identify version families. Numeric ordering means v10 follows v2. Equal highest revisions
+(such as v2 and v2.0), missing modification times or a lower revision edited more recently
+suspend version recommendations. Names such as `Holiday_001.jpg` are not version evidence.
+Exact duplicate analysis also retains the highest revision when every identical file belongs
+to the same explicit version family.
+
+New Deep inventories collect macOS `kMDItemLastUsedDate` through one bounded native worker
+before the inventory checkpoint: at most 10,000 eligible personal files and 5 seconds.
+Snapshot identity is checked before and after the query. Completed results survive a timeout;
+coverage and unknown counts are saved. Filesystem access times are never used as human opening
+evidence. Windows, Quick and legacy scans retain unknown opening history. Saved review, report
+generation and resume do not refresh it. See [cleanup opportunity rules](../README.md#cleanup-opportunities).
 
 ## Similar-name groups
 

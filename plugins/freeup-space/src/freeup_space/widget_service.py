@@ -14,6 +14,7 @@ from .investigation import validate_notes
 from .runtime import child_options, cli_command, plugin_root
 from .json_stream import artifact_path, load_json
 from .similar_groups import build_groups
+from .recommendations import build_recommendations
 from .widget_store import WidgetStore, valid_run_id, workspace_key
 
 ROOT = plugin_root()
@@ -248,6 +249,32 @@ class WidgetService:
             return self.save_review(session, list(ids), plan_digest, review.get("category", ""),
                 review.get("query", ""), review.get("offset", 0), review.get("similar_group", ""), review.get("group_offset", 0))
 
+    def select_recommended(self, session, category, plan_digest, action):
+        with self.lock:
+            if session["status"] != "review" or session["closed"] or not session["plan"]:
+                raise ValueError("Open the scan review before selecting recommendations")
+            if plan_digest != session["plan"]["digest"]:
+                raise ValueError("The displayed plan is stale")
+            if action not in {"select", "clear"}:
+                raise ValueError("Choose select or clear")
+            self.view(session)
+            index = session["view_index"]["recommendations"]
+            if category not in index["recommended"]:
+                raise ValueError("Unknown recommendation category")
+            recommended = index["recommended"][category]
+            review = session.get("review_state") or {}
+            ids = dict.fromkeys(review.get("ids", []))
+            if action == "select":
+                keep = set().union(*(index["dependencies"].get(i, set()) for i in recommended))
+                if keep.intersection(ids):
+                    raise ValueError("A file marked Keep is already selected. Clear it before selecting these recommendations.")
+                ids.update(dict.fromkeys(recommended))
+            else:
+                for identifier in recommended:
+                    ids.pop(identifier, None)
+            return self.save_review(session, list(ids), plan_digest, review.get("category", ""),
+                review.get("query", ""), review.get("offset", 0), review.get("similar_group", ""), review.get("group_offset", 0))
+
     def dismiss(self, session):
         with self.lock:
             session["closed"] = True
@@ -290,12 +317,15 @@ class WidgetService:
             cached = dict(plan=plan, digest=plan.get("digest"), by_category=by_category, by_id=by_id,
                           groups=sorted(groups.values(), key=lambda g: (-g["bytes"], g["category"])),
                           actionable_count=count, reclaimable_bytes=total, filter_key=None,
-                          similar=build_groups(candidates, self.actionable), group_query=None)
+                          similar=build_groups(candidates, self.actionable), group_query=None,
+                          recommendations=build_recommendations(plan, self.actionable))
             session["view_index"] = cached
         similar = cached["similar"]
+        recommendations = cached["recommendations"]
         key = (category, query.casefold(), similar_group)
         if cached["filter_key"] != key:
             source = (similar["members"].get(similar_group, []) if similar_group else
+                      recommendations["members"][category] if category in recommendations["members"] else
                       cached["by_category"].get(category, []) if category else candidates)
             cached["visible"] = [c for c in source if key[1] in
                 (c["path"] + " " + c["category"] + " " + c["candidate_id"]).casefold()] if query else source
@@ -305,12 +335,19 @@ class WidgetService:
                         if key[1] in c["path"].casefold()} if query else set(similar["groups"])
             cached["visible_groups"] = [g for g in similar["ordered"] if g["group_id"] in matching
                                         or query and key[1] in g["label"].casefold()]
+            cached["visible_versions"] = [k for k in recommendations["version_cards"] if not query or
+                any(key[1] in c["path"].casefold() for c in recommendations["members"][k])]
             cached["group_query"] = key[1]
         visible = cached["visible"]
         result = {k: session[k] for k in ("session_id", "key", "status", "mode", "run_id",
                   "progress", "started_at", "preview", "receipt", "error", "ai_status", "ai_notes")}
-        result.update(plan_digest=plan.get("digest"), candidates=[self.grouped_candidate(c, similar) for c in visible[offset:offset+50]],
+        version_keys = cached["visible_versions"]
+        result.update(plan_digest=plan.get("digest"), candidates=[self.grouped_candidate(c, similar, recommendations["details"].get(c["candidate_id"])) for c in visible[offset:offset+50]],
                       offset=offset, query=query, category=category, categories=cached["groups"],
+                      review_categories=recommendations["cards"],
+                      active_recommendation=recommendations["descriptions"].get(category),
+                      version_groups=[recommendations["descriptions"][k] for k in version_keys[group_offset:group_offset+20]],
+                      version_group_count=len(version_keys), opening_history_unknown_count=recommendations["unknown_count"],
                       similar_group=similar_group, group_offset=group_offset,
                       active_group=similar["groups"].get(similar_group),
                       similar_groups=cached["visible_groups"][group_offset:group_offset+20],
@@ -324,8 +361,8 @@ class WidgetService:
                       saved_scans=session.get("saved_scans", []))
         return result
 
-    def grouped_candidate(self, candidate, similar):
-        result = self.candidate(candidate)
+    def grouped_candidate(self, candidate, similar, review_details=None):
+        result = self.candidate(candidate, review_details)
         group = similar["groups"].get(similar["by_candidate"].get(candidate["candidate_id"]))
         if group:
             result.update(similar_group_id=group["group_id"], similar_group_count=group["actionable_count"],
@@ -337,10 +374,11 @@ class WidgetService:
         return (candidate.get("actionable") is True and candidate.get("risk") != "report-only"
                 and candidate.get("proposed_action") == "trash")
 
-    def candidate(self, candidate):
+    def candidate(self, candidate, review_details=None):
         return {**{k: candidate.get(k) for k in
                    ("candidate_id", "path", "category", "risk", "reclaimable_bytes", "reasons")},
                 "actionable": self.actionable(candidate),
+                "review_details": review_details,
                 "retained_path": candidate.get("evidence", {}).get("retained_path")}
 
     def directory(self, session):
@@ -562,7 +600,9 @@ class WidgetService:
             allowed = {c["candidate_id"]: c for c in plan["candidates"] if self.actionable(c)}
             if len(set(ids)) != len(ids) or any(i not in allowed for i in ids):
                 raise ValueError("Selection contains unknown, duplicate, or report-only candidate IDs")
-            selected = [self.candidate(allowed[i]) for i in ids]
+            self.view(session)
+            review_details = session["view_index"]["recommendations"]["details"]
+            selected = [self.candidate(allowed[i], review_details.get(i)) for i in ids]
             review = session.get("review_state") or {}
             session.update(review_state=dict(review, ids=list(ids), plan_digest=plan_digest,
                 selection_digest=self.selection_digest(ids, plan_digest)), selected_candidates=selected)

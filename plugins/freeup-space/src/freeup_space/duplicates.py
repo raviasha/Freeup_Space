@@ -11,6 +11,7 @@ from typing import Callable, DefaultDict, Iterable, List, Optional, Tuple
 
 from .models import DuplicateGroup, FileRecord
 from .file_io import regular_descriptor
+from .recommendations import version_key
 
 
 Hasher = Callable[[Path], str]
@@ -172,7 +173,10 @@ def find_duplicates(
                 if len(exact) < 2:
                     continue
                 retained = exact[0]
-                duplicates = tuple(item.path for item in exact[1:])
+                revisions = [version_key(item.path, "windows" if os.name == "nt" else "macos") for item in exact]
+                if all(key is not None and key[0] == revisions[0][0] for key in revisions):
+                    retained = max(zip(exact, revisions), key=lambda pair: pair[1][1])[0]
+                duplicates = tuple(item.path for item in exact if item is not retained)
                 group_token = hashlib.sha256(
                     "{}:{}".format(size, digest).encode("utf-8")
                 ).hexdigest()[:12].upper()
