@@ -12,6 +12,7 @@ from .models import CleanupPlan, Receipt
 from .plans import select_ids
 from .policy import Policy
 from .revalidate import revalidate
+from .version_safety import version_keepers
 from .trash_macos import move_to_trash as move_to_macos_trash
 from .trash_macos import prepare_for_trash as prepare_macos_trash
 from .trash_windows import move_to_trash as move_to_windows_trash
@@ -73,6 +74,7 @@ def apply_selection(
 
     selection = select_ids(plan, ids)
     policy = Policy.for_platform(platform)
+    keepers = version_keepers(plan, selection.candidate_ids)
     free_root = _free_space_root(selection.candidates[0].path)
     free_space_before = disk_usage(str(free_root)).free
     moved = []
@@ -81,7 +83,7 @@ def apply_selection(
     logical_moved_bytes = 0
 
     for candidate in selection.candidates:
-        decision = revalidate(candidate, policy)
+        decision = revalidate(candidate, policy, version_keeper=keepers.get(candidate.candidate_id))
         if not decision.actionable:
             skipped.append(
                 ApplySkipped(
@@ -103,9 +105,9 @@ def apply_selection(
         try:
             if platform == "macos":
                 prepare_macos_trash(candidate.path, platform)
-                # Downloads can change or replace a cloud item. The original
-                # approval never authorizes moving a different version.
-                decision = revalidate(candidate, policy)
+                # Preparation can change the candidate or invalidate its keeper.
+                # Recheck both recorded snapshots immediately before the move.
+                decision = revalidate(candidate, policy, version_keeper=keepers.get(candidate.candidate_id))
                 if not decision.actionable:
                     skipped.append(ApplySkipped(candidate.candidate_id, candidate.path, decision.reason))
                     continue

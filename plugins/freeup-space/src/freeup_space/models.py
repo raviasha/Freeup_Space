@@ -219,6 +219,8 @@ class FileRecord(JsonSerializable):
     file_kind: str = "regular"
     owner: Optional[str] = None
     flags: Tuple[str, ...] = ()
+    last_opened_at: Optional[float] = None
+    last_opened_source: Optional[str] = None
 
 
 @dataclass(frozen=True)

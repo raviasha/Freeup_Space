@@ -35,6 +35,14 @@ def test_same_size_different_content_is_not_duplicate(tmp_path):
     assert find_duplicates([a, b], sha256_hasher) == []
 
 
+def test_identical_explicit_versions_keep_the_highest_revision(tmp_path):
+    records = [make_file(tmp_path / name, b"identical document")
+               for name in ("Proposal_v1.docx", "Proposal_v2.docx", "Proposal_v10.docx")]
+    group = find_duplicates(records, sha256_hasher)[0]
+    assert group.retained_path == tmp_path / "Proposal_v10.docx"
+    assert {p.name for p in group.duplicate_paths} == {"Proposal_v1.docx", "Proposal_v2.docx"}
+
+
 def test_exact_content_match_is_confirmed_with_sha256(tmp_path):
     a = make_file(tmp_path / "a.bin", b"same content")
     b = make_file(tmp_path / "renamed.bin", b"same content")

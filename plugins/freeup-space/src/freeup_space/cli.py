@@ -123,6 +123,8 @@ def _decode_file_record(data: dict) -> FileRecord:
         file_kind=data.get("file_kind", "regular"),
         owner=data.get("owner"),
         flags=tuple(data.get("flags", ())),
+        last_opened_at=data.get("last_opened_at"),
+        last_opened_source=data.get("last_opened_source"),
     )
 
 
@@ -606,6 +608,8 @@ def cmd_start(args: argparse.Namespace) -> int:
         if any(not path.exists() for path in paths):
             raise RunArtifactError("one or more scan roots do not exist")
         run = inventory(paths, args.platform, run_id, args.mode)
+        from .opening_history import enrich_opening_history
+        run = enrich_opening_history(run)
         _store_run(run)  # Resume can reuse this inventory if hashing is interrupted.
     if not run.complete and args.summary_only:
         event = {"event": "inventory-saved", "run_id": run.run_id,
@@ -698,6 +702,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="freeup-space")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
+    from .opening_history import metadata_worker
+    subparsers.add_parser("_opening-history-worker", help=argparse.SUPPRESS).set_defaults(func=metadata_worker)
     subparsers.add_parser("modes", help="show the three scan choices without scanning").set_defaults(func=cmd_modes)
     start = subparsers.add_parser("start", help="choose Quick Scan, Deep Scan, or Deep Scan + AI")
     start.add_argument("paths", nargs="*", type=Path)

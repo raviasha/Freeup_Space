@@ -1,6 +1,6 @@
 {
   "name": "freeup-space",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "description": "Review cleanup opportunities on macOS and Windows with Quick Scan, Deep Scan, or Deep Scan + AI.",
   "author": {
     "name": "Local developer"
@@ -10,7 +10,7 @@
   "interface": {
     "displayName": "Freeup Space",
     "shortDescription": "Scan, select items and confirm cleanup in a widget.",
-    "longDescription": "Choose Quick Scan, Deep Scan or Deep Scan + AI in an interactive widget. Review similar-name groups across related formats, select every matching file across folders and pages, preview the complete selection and confirm recoverable moves to Trash or Recycle Bin.",
+    "longDescription": "Choose Quick Scan, Deep Scan or Deep Scan + AI. Review disposable clutter, verified extra copies, older versions with a keep-latest recommendation, inactive files and large personal files. Select recommended items across the saved scan, preview exact files and confirm recoverable moves to Trash or Recycle Bin.",
     "developerName": "Local developer",
     "category": "Productivity",
     "capabilities": [

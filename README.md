@@ -10,6 +10,13 @@ Each new run offers:
 
 All modes produce a categorized, unchecked review report. Selecting a mode is never deletion approval.
 
+The widget groups disposable clutter, verified extra copies, older personal-file versions,
+large personal files and old downloads. **Select recommended files** selects across the whole
+saved scan, including hidden pages. Version recommendations keep the latest explicit revision;
+older drafts still need review. Inactivity categories offer 6, 12 or 24 months and distinguish
+recorded opening history from modification age. Opening history is available for supported
+macOS files in new Deep scans; missing history, including Windows, is clearly labeled.
+
 ## Easy setup (recommended)
 
 [Download Freeup Space Setup](https://github.com/raviasha/Freeup_Space/releases/latest).
@@ -59,7 +66,7 @@ Start a new Codex task after installing, then ask: **“Help me free up disk spa
 - [Computer-access permissions and safety guidance](plugins/freeup-space/docs/codex-permissions.md)
 - [Optional AI investigation and content-access boundaries](plugins/freeup-space/skills/freeing-up-space/references/ai-investigation.md)
 
-“Old” means not modified for 12 months, not proven unused. Managed application stores may be
+The CLI “old” finding means not modified for 12 months, not proven unused. Managed application stores may be
 report-only. Ebook sorting, similar-image culling and blur detection are separate workflows,
 not included features. Moving files to Trash or Recycle Bin does not necessarily reclaim space
 until they are permanently removed.

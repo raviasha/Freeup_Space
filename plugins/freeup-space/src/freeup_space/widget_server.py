@@ -44,6 +44,8 @@ TOOLS = [
          ["session_id", "key", "plan_digest", "category", "query", "offset"], app=True, readonly=False),
     tool("select_similar_group", "Select similar files", "Select or clear every eligible member of a filename group across the complete scan. Never previews or moves files.",
          dict(SESSION, group_id=STRING, plan_digest=STRING, action={"type": "string", "enum": ["select", "clear"]}), app=True, readonly=False),
+    tool("select_recommended", "Select recommended files", "Select or clear the exact recommended IDs for a review category across the complete scan, preserving the recommended keepers. Never previews or moves files.",
+         dict(SESSION, category=STRING, plan_digest=STRING, action={"type": "string", "enum": ["select", "clear"]}), app=True, readonly=False),
     tool("dismiss_widget", "Close widget", "Hide the widget while retaining the scan and selected IDs. No file moves.", SESSION, app=True, readonly=False),
     tool("cancel_preview", "Back to selection", "Invalidate the preview and return to editing the selection.", SESSION, app=True, readonly=False),
     tool("start_scan", "Start scan", "Start the mode selected by the user in the widget; never deletes files.",
@@ -139,6 +141,8 @@ class Server:
                     args["plan_digest"], args.get("selection_digest"), **filters)
         elif name == "select_similar_group":
             view = self.service.select_group(session, args["group_id"], args["plan_digest"], args["action"])
+        elif name == "select_recommended":
+            view = self.service.select_recommended(session, args["category"], args["plan_digest"], args["action"])
         elif name == "dismiss_widget":
             view = self.service.dismiss(session)
         elif name == "cancel_preview":

@@ -23,6 +23,7 @@ from .models import (
     Risk,
     ScanRun,
 )
+from .opening_history import opening_evidence
 from .policy import Policy
 from .path_utils import normalize_path
 from .widget_progress import StageProgress
@@ -224,6 +225,15 @@ def build_plan(
             "categories": finding.categories,
             "rules": finding.rules,
         }
+        # Preserve reviewed legacy plan signatures: absence means unknown too.
+        has_opening_metadata = ("opening_history" in run.coverage
+                                or record.last_opened_at is not None
+                                or record.last_opened_source is not None)
+        if (has_opening_metadata and record.file_kind == "regular" and finding.actionable
+                and "personal-data" in finding.categories):
+            evidence_data["opening_history"] = opening_evidence(
+                record, (run.completed_at or run.started_at).timestamp()
+            )
         digest = None
         if duplicate_group is not None:
             digest = duplicate_group.digest
